@@ -253,7 +253,8 @@ function storyTable(rows, ctx = {}) {
       if (c === 'title') {
         return `<td class="col-title"><a href="#/story/${esc(s.id)}">${esc(s.headline)}</a>
           ${(s.topics || []).slice(0, 2).map((t) =>
-            `<span class="chip topic tiny" data-topic="${esc(t.slug)}">${esc(t.label)}</span>`).join('')}</td>`;
+            `<span class="chip topic tiny" data-topic="${esc(t.slug)}">${esc(t.label)}</span>`).join('')}
+          ${s.summary ? `<span class="rowsum">${esc(s.summary)}</span>` : ''}</td>`;
       }
       if (c === 'publishers') {
         return `<td class="num col-publishers" title="${esc((s.publishers || []).map((p) => p.name).join(', '))}">
@@ -627,7 +628,7 @@ async function viewStory(id) {
          </div>` : '';
 
     main.innerHTML = `
-      <article>
+      <article class="story">
         <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px">
           <span class="chip cat">${esc(s.category_label || '')}</span>
           <span class="chip multi">${s.publisher_count} ${s.publisher_count === 1 ? 'uitgever' : 'uitgevers'} · ${s.article_count} artikelen</span>
@@ -656,6 +657,8 @@ async function viewStory(id) {
           ${feedbackButtons(s)}
         </div>
 
+        <div class="storycols">
+        <div class="storycol-main">
         ${(s.topics || []).length ? `<div class="sub">Onderwerpen & entiteiten</div>
           <div style="display:flex;gap:7px;flex-wrap:wrap">
             ${s.topics.map((t) => `<span class="chip topic" data-topic="${esc(t.slug)}">${esc(t.label)}</span>`).join('')}
@@ -666,7 +669,9 @@ async function viewStory(id) {
         <div class="timeline">${(s.timeline || []).map((t) =>
           `<div class="tl"><div class="t">${clock(t.at)} · ${esc(t.publisher)}${t.revised ? ' · bijgewerkt' : ''}</div>
             <a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.title)}</a></div>`).join('')}</div>
+        </div>
 
+        <div class="storycol-side">
         <div class="sub">Zo brengen de uitgevers het (${(s.articles || []).length} artikelen)</div>
         <div class="src-list">${(s.articles || []).map((a) => `
           <div class="src">
@@ -688,9 +693,11 @@ async function viewStory(id) {
                  style="font-size:12.5px;color:var(--accent);font-weight:650">Lees bij ${esc(a.publisher.name)} →</a>
             </div>
           </div>`).join('')}</div>
+        </div>
+        </div>
 
-        ${(s.related || []).length ? `<div class="sub">Gerelateerd</div>
-          <div class="rail">${s.related.map((r) => storyCard(r, 'compact')).join('')}</div>` : ''}
+        ${(s.related || []).length ? `<div class="related-wrap"><div class="sub">Gerelateerd</div>
+          <div class="grid">${s.related.map((r) => storyCard(r)).join('')}</div></div>` : ''}
       </article>`;
     window.scrollTo(0, 0);
   } catch (e) { main.innerHTML = errorState(e.message); }

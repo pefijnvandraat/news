@@ -183,6 +183,27 @@ De keuze kaarten/lijst wordt onthouden in `localStorage`. Op smalle schermen
 verbergt de tabel achtereenvolgens de minst essentiële kolommen, zodat titel,
 tijd en acties altijd zichtbaar blijven.
 
+### Breedte: schaalt mee, behalve de lopende tekst
+
+De schil schaalt met het venster (`min(2100px, 95vw)`) in plaats van te stoppen
+bij een vaste kolombreedte, dus een breed scherm levert méér kolommen op en
+geen lege marges. Kaarten blijven daarbij ~300px breed; alleen hun aantal
+groeit (1 → 3 → 4 → 5 → 6 kolommen).
+
+**Lopende tekst doet daar bewust niet aan mee.** Een regel van 1700px is
+ongeveer 250 tekens; het oog verliest dan het begin van de volgende regel.
+Daarom zijn de tekstblokken apart begrensd op `--prose` (70ch ≈ 77 tekens) en
+de brontekst op 68ch.
+
+De verhaalpagina splitst op ≥1200px in twee kolommen: onderwerpen en de
+publicatietijdlijn links, de artikelen van de uitgevers rechts (meescrollend).
+Dat is precies de vergelijking waarvoor die pagina bestaat, en het is wat de
+extra breedte daar verdient in plaats van een half leeg scherm.
+
+In de lijstweergave verschijnt vanaf 1500px een samenvattingsregel onder de
+titel: anders slokt de titelkolom alle overgebleven ruimte op en ontstaat er
+een gat vóór de volgende kolom.
+
 ## Gelezen nieuwsartikelen
 
 De Voorpagina en Mijn nieuws tonen standaard alleen wat **nieuw voor jou** is.

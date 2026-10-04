@@ -17,7 +17,14 @@
   --warn: #9a6400;
   --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 8px 24px rgba(16, 24, 40, .06);
   --radius: 14px;
-  --maxw: 1240px;
+  /* Shell width scales with the window instead of stopping at a fixed cap, so
+     wide screens gain columns rather than empty margins. The upper bound keeps
+     an ultrawide monitor from stretching to a wall of tiny cards. */
+  --maxw: min(2100px, 95vw);
+  /* Running text is capped separately. A headline grid can be 1700px wide and
+     still read well; a paragraph at that width is ~250 characters per line,
+     which is unreadable. ~78 characters is the comfortable range. */
+  --prose: 70ch;
 }
 html[data-theme="dark"] {
   --bg: #0d1013;
@@ -130,8 +137,17 @@ img { display: block; max-width: 100%; }
 .section-head .more { margin-left: auto; font-size: 13px; color: var(--accent); font-weight: 600; }
 
 .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); }
+/* The lead block gives the top story a double-width slot. The number of
+   companion cards grows with the viewport so a wide screen fills the row
+   instead of stretching three cards across it. */
 .grid.lead { grid-template-columns: 2fr 1fr 1fr; }
+@media (min-width: 1500px) { .grid.lead { grid-template-columns: 2fr 1fr 1fr 1fr; } }
+@media (min-width: 1900px) { .grid.lead { grid-template-columns: 2fr 1fr 1fr 1fr 1fr; } }
+/* The compact rail is a list of small cards. On a wide screen one tall column
+   wastes the same space we just reclaimed, so let it wrap into columns. */
 .rail { display: grid; gap: 10px; }
+@media (min-width: 1100px) { .rail { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 1700px) { .rail { grid-template-columns: 1fr 1fr 1fr; } }
 
 /* ---------- cards ---------- */
 .card {
@@ -257,6 +273,16 @@ table.storytable tbody tr:last-child td { border-bottom: 0; }
 table.storytable .col-title { min-width: 320px; }
 table.storytable .col-title a { font-weight: 650; line-height: 1.35; }
 table.storytable .col-title a:hover { color: var(--accent); }
+/* On a wide screen the title column would otherwise absorb all slack and leave
+   a gap before the next column. Spend it on the summary instead of whitespace. */
+.rowsum { display: none; }
+@media (min-width: 1500px) {
+  .rowsum {
+    display: block; margin-top: 3px; font-size: 12.5px; color: var(--faint);
+    line-height: 1.4; max-width: 95ch;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+}
 table.storytable .col-updated { white-space: nowrap; color: var(--muted); font-size: 13px; }
 table.storytable .t-short { display: none; }
 table.storytable .col-why { max-width: 240px; }
@@ -353,9 +379,43 @@ button.why.linkish {
 .skel .sk.line.s { width: 55%; }
 @keyframes sh { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
 
+/* ---------- story detail ----------
+   The shell widens on big screens, but running text must not: a 1700px line is
+   roughly 250 characters, far past the point where the eye loses the start of
+   the next line. So the *text* blocks are capped rather than the whole page —
+   that way related stories below can still use the full width as cards. */
+.story > h1,
+.story > .meta-row,
+.story > .ai-box,
+.story > .warn-box,
+.story > .notice,
+.story > p,
+.story > div:not(.related-wrap):not(.grid):not(.storycols) {
+  max-width: var(--prose);
+}
+.story .related-wrap { max-width: none; }
+
+/* Below the summary the page splits: topics and the publication timeline on
+   the left, the publishers' own articles on the right. That is the comparison
+   this page exists for, and it is what finally earns the extra width instead
+   of leaving a blank half-screen. */
+.storycols { display: grid; gap: 28px; align-items: start; }
+.storycol-main > .timeline { max-width: var(--prose); }
+@media (min-width: 1200px) {
+  .storycols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .storycol-side { position: sticky; top: 76px; }
+  .storycol-side .src-list { max-height: calc(100vh - 140px); overflow-y: auto; }
+  /* The left column is already narrower than the prose cap here. */
+  .storycol-main > .timeline { max-width: none; }
+}
+@media (min-width: 1700px) {
+  .storycols { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); }
+}
+
 .notice {
   background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--ai);
   border-radius: 10px; padding: 13px 16px; margin-bottom: 20px; font-size: 14px; color: var(--muted);
+  max-width: var(--prose);
 }
 .notice strong { color: var(--text); }
 
@@ -396,8 +456,8 @@ button.why.linkish {
 }
 .src:hover { border-color: var(--accent); }
 .src .sbody { flex: 1; min-width: 0; }
-.src h4 { margin: 0 0 5px; font-size: 15.5px; line-height: 1.32; }
-.src .sdesc { margin: 0 0 7px; font-size: 13.5px; color: var(--muted); }
+.src h4 { margin: 0 0 5px; font-size: 15.5px; line-height: 1.32; max-width: 60ch; }
+.src .sdesc { margin: 0 0 7px; font-size: 13.5px; color: var(--muted); max-width: 68ch; }
 .src .sthumb { width: 84px; height: 62px; border-radius: 8px; object-fit: cover; flex: none; background: var(--surface-2); }
 
 .timeline { border-left: 2px solid var(--border); margin: 6px 0 4px; padding-left: 16px; display: grid; gap: 13px; }
