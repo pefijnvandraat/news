@@ -480,6 +480,16 @@ def privacy_forget(payload: dict = Body(...)):
     return {"ok": True}
 
 
+@app.post("/api/privacy/unhide")
+def privacy_unhide(payload: dict = Body(default={})):
+    """Restore one hidden story, or all of them when story_id is omitted."""
+    story_id = (payload or {}).get("story_id")
+    if story_id:
+        personalise.record_interaction("unhide", story_id=story_id)
+        return {"ok": True, "restored": 1}
+    return {"ok": True, "restored": personalise.unhide_all()}
+
+
 # ---------------------------------------------------------------------------
 # Sources (add your own publisher)
 # ---------------------------------------------------------------------------

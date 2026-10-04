@@ -690,6 +690,36 @@ async function viewPrivacy() {
                  <span class="c">${Math.round(t.score * 100)}% · vergeet ✕</span></button>`).join('')}</div>`
           : '<div style="color:var(--muted)">Nog niets geleerd — lees een paar verhalen.</div>'}
 
+        <div class="sub">Verborgen verhalen${d.hidden_total ? ` (${d.hidden_total})` : ''}</div>
+        ${d.hidden_total ? `
+          <p style="color:var(--muted);font-size:14px;margin:0 0 12px">
+            Deze verhalen zijn uit je feeds gefilterd. Zet ze terug om ze weer te zien.</p>
+          <div class="hidden-list">
+            ${d.hidden_stories.map((s) => `
+              <div class="hidden-row">
+                <div class="hr-body">
+                  <a href="#/story/${esc(s.id)}">${esc(s.headline)}</a>
+                  <span class="hr-meta">${esc(s.category || '')} · verborgen ${ago(s.hidden_at)}</span>
+                </div>
+                <button class="mini" data-unhide="${esc(s.id)}">↩ Weer tonen</button>
+              </div>`).join('')}
+          </div>
+          ${d.hidden_total > d.hidden_stories.length ? `
+            <p style="color:var(--faint);font-size:12.5px;margin-top:10px">
+              ${d.hidden_total - d.hidden_stories.length} verborgen verhaal(en) bestaan niet meer
+              — die zijn uit het nieuwsarchief verdwenen.</p>` : ''}
+          <div style="margin-top:12px">
+            <button class="btn ghost" data-action="unhide-all">↩ Alles weer tonen</button>
+          </div>`
+          : '<div style="color:var(--muted)">Je hebt niets verborgen.</div>'}
+
+        <div class="sub">Expliciete feedback op verhalen</div>
+        <div style="color:var(--muted);font-size:14px">
+          👍 ${d.feedback_counts?.more || 0} keer "meer zo" ·
+          👎 ${d.feedback_counts?.less || 0} keer "minder zo".
+          Klik een actieve knop op een verhaal opnieuw om je keuze in te trekken.
+        </div>
+
         <div class="sub">Opgeslagen signalen</div>
         <div style="color:var(--muted);font-size:14px">
           ${Object.entries(d.interaction_counts || {}).map(([k, v]) =>
@@ -873,6 +903,12 @@ document.addEventListener('click', async (ev) => {
     await API.post('/api/privacy/forget', { slug: forget.dataset.forget });
     viewPrivacy(); return;
   }
+  const unhide = t.closest('[data-unhide]');
+  if (unhide) {
+    ev.preventDefault();
+    await API.post('/api/privacy/unhide', { story_id: unhide.dataset.unhide });
+    viewPrivacy(); return;
+  }
   const srcDel = t.closest('[data-src-del]');
   if (srcDel) { await API.del(`/api/sources/${srcDel.dataset.srcDel}`); viewSources(); return; }
 
@@ -891,6 +927,10 @@ document.addEventListener('click', async (ev) => {
       if (confirm('Alle geleerde voorkeuren en leesgeschiedenis wissen? Je favorieten blijven staan.')) {
         await API.post('/api/privacy/reset'); viewPrivacy();
       }
+    }
+    if (a === 'unhide-all') {
+      await API.post('/api/privacy/unhide', {});
+      viewPrivacy();
     }
     return;
   }

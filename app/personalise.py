@@ -219,20 +219,64 @@ def negative_signals(user: str = USER) -> dict[str, float]:
     return acc
 
 
+def _toggle_state(user: str, on_action: str, off_action: str) -> set[str]:
+    """Story ids whose latest verdict is `on_action`.
+
+    Replayed in insert order rather than compared as sets: a set difference
+    would read hide -> unhide -> hide as "not hidden", because the id sits in
+    both sets. Same reason explicit_feedback replays by rowid.
+    """
+    rows = query(
+        "SELECT story_id, action FROM user_interactions "
+        "WHERE user_id=? AND story_id IS NOT NULL AND action IN (?,?) "
+        "ORDER BY rowid ASC", (user, on_action, off_action))
+    state: dict[str, str] = {}
+    for r in rows:
+        state[r["story_id"]] = r["action"]
+    return {sid for sid, action in state.items() if action == on_action}
+
+
 def hidden_story_ids(user: str = USER) -> set[str]:
-    hidden = {r["story_id"] for r in query(
-        "SELECT story_id FROM user_interactions WHERE user_id=? AND action='hide'", (user,))}
-    unhidden = {r["story_id"] for r in query(
-        "SELECT story_id FROM user_interactions WHERE user_id=? AND action='unhide'", (user,))}
-    return {s for s in hidden - unhidden if s}
+    return _toggle_state(user, "hide", "unhide")
+
+
+def hidden_stories(user: str = USER) -> list[dict]:
+    """Hidden stories that still exist, newest hide first.
+
+    A story can disappear from the corpus once its articles age out, so the
+    hide record can outlive the story it refers to. Those are reported as a
+    count rather than listed, since there is nothing left to restore.
+    """
+    ids = hidden_story_ids(user)
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    rows = query(
+        f"""SELECT s.id, s.headline, s.category, s.last_updated_at
+            FROM stories s WHERE s.id IN ({marks})""", tuple(ids))
+    when = {r["story_id"]: r["created_at"] for r in query(
+        "SELECT story_id, created_at FROM user_interactions "
+        "WHERE user_id=? AND action='hide' ORDER BY rowid ASC", (user,))}
+    out = [{
+        "id": r["id"],
+        "headline": r["headline"],
+        "category": r["category"],
+        "last_updated_at": r["last_updated_at"],
+        "hidden_at": when.get(r["id"]),
+    } for r in rows]
+    out.sort(key=lambda s: s["hidden_at"] or "", reverse=True)
+    return out
+
+
+def unhide_all(user: str = USER) -> int:
+    ids = hidden_story_ids(user)
+    for story_id in ids:
+        record_interaction("unhide", story_id=story_id, user=user)
+    return len(ids)
 
 
 def saved_story_ids(user: str = USER) -> set[str]:
-    saved = {r["story_id"] for r in query(
-        "SELECT story_id FROM user_interactions WHERE user_id=? AND action='save'", (user,))}
-    unsaved = {r["story_id"] for r in query(
-        "SELECT story_id FROM user_interactions WHERE user_id=? AND action='unsave'", (user,))}
-    return {s for s in saved - unsaved if s}
+    return _toggle_state(user, "save", "unsave")
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +381,8 @@ def privacy_snapshot(user: str = USER) -> dict:
         "SELECT action, COUNT(*) AS n FROM user_interactions WHERE user_id=? GROUP BY action",
         (user,))
     learned = learned_interests(user)
+    hidden = hidden_stories(user)
+    feedback = explicit_feedback(user)
     return {
         "favourites": list_favourites(user),
         "interaction_counts": {r["action"]: r["n"] for r in counts},
@@ -346,6 +392,12 @@ def privacy_snapshot(user: str = USER) -> dict:
              for k, v in learned.items() if v > 0),
             key=lambda x: -x["score"])[:40],
         "publisher_affinity": {k: round(v, 3) for k, v in publisher_affinity(user).items()},
+        "hidden_stories": hidden,
+        "hidden_total": len(hidden_story_ids(user)),
+        "feedback_counts": {
+            "more": sum(1 for a, _t in feedback.values() if a == "more"),
+            "less": sum(1 for a, _t in feedback.values() if a == "less"),
+        },
         "storage": "Alles wordt lokaal opgeslagen in nieuws/data/nieuws.db en verlaat je machine niet.",
     }
 

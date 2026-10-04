@@ -247,6 +247,25 @@ verhaal), dus na herladen zie je nog steeds wat je gekozen hebt, en elke kopie
 van een verhaal op het scherm (kaart, tabelrij, Waarom-paneel) toont dezelfde
 toestand.
 
+### Verborgen verhalen terugzetten
+
+*Verberg* filtert een verhaal uit al je feeds. Omdat de rij daarmee verdwijnt,
+is er geen knop meer om op te klikken — daarom staat op de privacypagina een
+sectie **Verborgen verhalen** met per verhaal een *Weer tonen*-knop en een
+*Alles weer tonen*-knop.
+
+Een hide-record kan het verhaal overleven: als de artikelen te oud worden,
+verdwijnt het verhaal uit het corpus. Die worden geteld maar niet getoond,
+want er valt niets meer terug te zetten.
+
+### Aan/uit-toestanden worden afgespeeld, niet afgetrokken
+
+`hide`/`unhide` en `save`/`unsave` gebruiken dezelfde laatste-wint-logica als
+de duimen. Een setverschil (`hide - unhide`) leek simpeler maar is fout: na
+*verbergen → terugzetten → verbergen* staat het id in beide verzamelingen en
+leest het resultaat als "niet verborgen". `tools_test_toggles.py` dekt dat
+geval expliciet af.
+
 Er worden uitsluitend topic-, uitgever- en verhaal-id's opgeslagen. Er worden
 geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 
@@ -266,7 +285,7 @@ geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 | `GET POST DELETE /api/favourites` | Favoriete onderwerpen |
 | `GET /api/mynews` | Gepersonaliseerde feed met redenen |
 | `POST /api/interactions` | Gedragssignaal vastleggen |
-| `GET /api/privacy`, `POST /api/privacy/{reset,forget}` | Inzage en wissen |
+| `GET /api/privacy`, `POST /api/privacy/{reset,forget,unhide}` | Inzage, wissen en verborgen verhalen terugzetten |
 | `GET POST PATCH DELETE /api/sources` | Eigen bronnen beheren |
 
 ---
@@ -308,6 +327,7 @@ py -3.12 tools_rebuild.py              # taxonomie opnieuw toepassen + verhalen 
 py -3.12 tools_profile.py priority     # tijdsverdeling van een ronde meten
 py -3.12 tools_badge_audit.py          # welke verhalen 'Ontwikkelt zich' tonen en waarom
 py -3.12 tools_test_feedback.py        # duim omhoog/omlaag-toestandsmachine testen
+py -3.12 tools_test_toggles.py         # verbergen/bewaren-toggles testen
 py -3.12 tools_profile_inspect.py      # favorieten, feedback en signalen bekijken
 py -3.12 tools_remove_publisher.py id  # uitgever + artikelen verwijderen
 ```
