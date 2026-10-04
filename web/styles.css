@@ -171,6 +171,20 @@ img { display: block; max-width: 100%; }
 .chip.multi { background: var(--surface-2); color: var(--text); font-weight: 700; }
 .chip.ai { background: var(--ai-soft); color: var(--ai); border-color: transparent; }
 .chip.disc { background: var(--ai-soft); color: var(--ai); border-color: transparent; }
+.chip.new { background: var(--ok); color: #fff; border-color: transparent; }
+
+.readnote {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  border-radius: 10px; padding: 10px 14px; margin-bottom: 18px;
+  font-size: 13.5px; color: var(--muted);
+}
+.readnote a { color: var(--accent); font-weight: 650; }
+
+.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.switch input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+.switch span { font-size: 14px; color: var(--text); font-weight: 600; }
 
 .badge-story {
   position: absolute; top: 10px; left: 10px; z-index: 2;
@@ -274,7 +288,7 @@ button.why.linkish {
 }
 @media (max-width: 700px) {
   table.storytable .col-category, table.storytable .col-publishers,
-  table.storytable .col-status { display: none; }
+  table.storytable .col-status, table.storytable .col-readAt { display: none; }
   /* Let the title absorb whatever space is left so the time and the action
      buttons stay on screen instead of hiding behind a horizontal scroll. */
   table.storytable .col-title { min-width: 0; }

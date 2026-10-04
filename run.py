@@ -49,59 +49,29 @@ def _port_in_use(port: int) -> bool:
         return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
-def _reclaim_port(port: int, log: logging.Logger, timeout: float = 12.0) -> bool:
-    """Terminate a stale copy of *this* app that is still holding the port.
+def _wait_for_port(port: int, log: logging.Logger, timeout: float = 15.0) -> bool:
+    """Wait for a previous instance to release the port.
 
-    Process managers on Windows can lose track of a windowless child. The
-    orphan keeps serving, every new instance fails to bind, and the manager
-    sits in a restart loop while the site still appears to work - which is a
-    genuinely confusing state to debug.
+    A process manager restarting this app stops the old instance and starts the
+    new one; on Windows the listening socket is released a moment later, so the
+    new process can briefly find the port occupied. Waiting it out is the right
+    response.
 
-    Only processes whose command line references this exact script are ever
-    touched, so this can never kill an unrelated service that happens to use
-    the same port; in that case we leave it alone and report the conflict.
+    Deliberately does *not* terminate whoever holds the port. An earlier version
+    did, and it turned a restart into a loop: the new process killed the one the
+    manager had just started, the manager saw its child die and restarted, and
+    round it went. Killing on behalf of a supervisor is the supervisor's job.
     """
-    try:
-        import psutil
-    except ImportError:
-        log.warning("psutil not installed - cannot reclaim port %s automatically", port)
-        return False
-
-    me = os.getpid()
-    script = os.path.abspath(__file__).lower()
-    stale = []
-    for proc in psutil.process_iter(["pid", "cmdline"]):
-        if proc.info["pid"] == me:
-            continue
-        cmdline = " ".join(proc.info["cmdline"] or []).lower()
-        if script in cmdline:
-            stale.append(proc)
-
-    if not stale:
-        return False
-
-    log.warning("reclaiming port %s from %d stale instance(s): %s",
-                port, len(stale), [p.pid for p in stale])
-    for proc in stale:
-        try:
-            proc.terminate()
-        except psutil.Error:
-            pass
-    gone, alive = psutil.wait_procs(stale, timeout=timeout * 0.6)
-    for proc in alive:
-        try:
-            proc.kill()
-        except psutil.Error:
-            pass
-    psutil.wait_procs(alive, timeout=timeout * 0.4)
-
-    # Windows frees the listening socket a moment after the owner exits.
+    if not _port_in_use(port):
+        return True
+    log.info("port %s is still held, probably by the instance being replaced "
+             "- waiting up to %.0fs", port, timeout)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        time.sleep(0.5)
         if not _port_in_use(port):
             return True
-        time.sleep(0.4)
-    return not _port_in_use(port)
+    return False
 
 
 if __name__ == "__main__":
@@ -112,13 +82,12 @@ if __name__ == "__main__":
     windowless = os.path.basename(sys.executable).lower().startswith("pythonw")
     port = int(os.environ.get("NIEUWS_PORT", "8500"))
 
-    # A previous instance may still be holding the port. Under a process
-    # manager the raw bind failure is a cryptic WinError 10048 buried in a
-    # restart loop, so reclaim our own stale copy and report anything else
-    # plainly instead of looping.
-    if _port_in_use(port) and not _reclaim_port(port, log):
-        log.error("port %s is in use by something that is not this app. "
-                  "Free it, or set NIEUWS_PORT to another port.", port)
+    # A previous instance may still be releasing the port. Wait it out, and
+    # report plainly rather than failing with a bare WinError 10048 buried in
+    # a restart loop.
+    if not _wait_for_port(port, log):
+        log.error("port %s is still in use. Another instance or an unrelated "
+                  "service is holding it; stop that, or set NIEUWS_PORT.", port)
         sys.exit(1)
 
     log.info("starting on 127.0.0.1:%s (windowless=%s)", port, windowless)

@@ -33,6 +33,7 @@ ACTION_WEIGHTS = {
     "unsave": -0.6,
     "hide": -2.0,
     "unhide": 0.0,
+    "unread": 0.0,           # puts a read story back on the front page
     "less": -3.0,
     "feedback_clear": 0.0,   # withdraws an earlier more/less on that story
 }
@@ -219,25 +220,88 @@ def negative_signals(user: str = USER) -> dict[str, float]:
     return acc
 
 
-def _toggle_state(user: str, on_action: str, off_action: str) -> set[str]:
-    """Story ids whose latest verdict is `on_action`.
+def _latest_state(user: str, on_actions: tuple[str, ...],
+                  off_actions: tuple[str, ...]) -> dict[str, str]:
+    """Story id -> timestamp of the latest 'on' verdict that is still standing.
 
     Replayed in insert order rather than compared as sets: a set difference
     would read hide -> unhide -> hide as "not hidden", because the id sits in
     both sets. Same reason explicit_feedback replays by rowid.
     """
+    actions = on_actions + off_actions
+    marks = ",".join("?" * len(actions))
     rows = query(
-        "SELECT story_id, action FROM user_interactions "
-        "WHERE user_id=? AND story_id IS NOT NULL AND action IN (?,?) "
-        "ORDER BY rowid ASC", (user, on_action, off_action))
+        f"SELECT story_id, action, created_at FROM user_interactions "
+        f"WHERE user_id=? AND story_id IS NOT NULL AND action IN ({marks}) "
+        f"ORDER BY rowid ASC", (user, *actions))
     state: dict[str, str] = {}
     for r in rows:
-        state[r["story_id"]] = r["action"]
-    return {sid for sid, action in state.items() if action == on_action}
+        if r["action"] in off_actions:
+            state.pop(r["story_id"], None)
+        else:
+            state[r["story_id"]] = r["created_at"]
+    return state
+
+
+def _toggle_state(user: str, on_action: str, off_action: str) -> set[str]:
+    return set(_latest_state(user, (on_action,), (off_action,)))
 
 
 def hidden_story_ids(user: str = USER) -> set[str]:
     return _toggle_state(user, "hide", "unhide")
+
+
+# Opening a story, or clicking through to a publisher's article, both count as
+# having read it. 'unread' puts it back on the front page.
+READ_ACTIONS = ("open", "open_article")
+
+
+def read_state(user: str = USER) -> dict[str, str]:
+    """Story id -> when you last read it."""
+    return _latest_state(user, READ_ACTIONS, ("unread",))
+
+
+def unread_story_ids(stories: list[dict], read: dict[str, str]) -> set[str]:
+    """Ids to keep on a 'what's new' surface.
+
+    A story you read is suppressed only while it stays the story you read. If
+    publishers have updated it since, it is news to you again, so it returns.
+    """
+    keep: set[str] = set()
+    for s in stories:
+        read_at = read.get(s["id"])
+        if read_at is None or (s.get("last_updated_at") or "") > read_at:
+            keep.add(s["id"])
+    return keep
+
+
+def read_stories(user: str = USER) -> list[dict]:
+    """Stories you have read that still exist, most recently read first."""
+    read = read_state(user)
+    if not read:
+        return []
+    marks = ",".join("?" * len(read))
+    rows = query(
+        f"""SELECT id, headline, summary, category, geo_scope, article_count,
+                   publisher_count, last_updated_at, image_url, is_updating,
+                   importance, frontpage_score
+            FROM stories WHERE id IN ({marks})""", tuple(read))
+    out = []
+    for r in rows:
+        item = dict(r)
+        item["read_at"] = read[r["id"]]
+        item["updated_since_read"] = (r["last_updated_at"] or "") > read[r["id"]]
+        out.append(item)
+    out.sort(key=lambda s: s["read_at"] or "", reverse=True)
+    return out
+
+
+def mark_unread(story_id: str | None = None, user: str = USER) -> int:
+    """Put one story, or everything, back on the front page."""
+    ids = [story_id] if story_id else list(read_state(user))
+    for sid in ids:
+        record_interaction("unread", story_id=sid, user=user)
+    return len(ids)
 
 
 def hidden_stories(user: str = USER) -> list[dict]:
@@ -292,6 +356,10 @@ def build_my_news(stories: list[dict], limit: int = 40, user: str = USER) -> dic
     regional = any(s in favourites for s in ("friesland", "fryslan", "makkum",
                                              "sc-heerenveen"))
 
+    hide_read = get_setting("hide_read", "on", user) == "on"
+    unread = unread_story_ids(stories, read_state(user)) if hide_read else None
+    read_skipped = 0
+
     ids = [s["id"] for s in stories]
     topics_map = load_story_topics(ids)
     pubs_map = story_publishers(ids)
@@ -299,6 +367,9 @@ def build_my_news(stories: list[dict], limit: int = 40, user: str = USER) -> dic
     scored: list[dict] = []
     for s in stories:
         if s["id"] in hidden:
+            continue
+        if unread is not None and s["id"] not in unread:
+            read_skipped += 1
             continue
         s = dict(s)
         s["topics"] = topics_map.get(s["id"], [])
@@ -322,6 +393,8 @@ def build_my_news(stories: list[dict], limit: int = 40, user: str = USER) -> dic
         "cold_start": cold_start,
         "has_favourites": bool(favourites),
         "learned_count": len(learned),
+        "read_skipped": read_skipped,
+        "hide_read": hide_read,
         "stories": result[:limit],
     }
 
@@ -383,6 +456,7 @@ def privacy_snapshot(user: str = USER) -> dict:
     learned = learned_interests(user)
     hidden = hidden_stories(user)
     feedback = explicit_feedback(user)
+    read = read_state(user)
     return {
         "favourites": list_favourites(user),
         "interaction_counts": {r["action"]: r["n"] for r in counts},
@@ -394,6 +468,8 @@ def privacy_snapshot(user: str = USER) -> dict:
         "publisher_affinity": {k: round(v, 3) for k, v in publisher_affinity(user).items()},
         "hidden_stories": hidden,
         "hidden_total": len(hidden_story_ids(user)),
+        "read_total": len(read),
+        "hide_read": get_setting("hide_read", "on", user) == "on",
         "feedback_counts": {
             "more": sum(1 for a, _t in feedback.values() if a == "more"),
             "less": sum(1 for a, _t in feedback.values() if a == "less"),

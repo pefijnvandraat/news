@@ -283,13 +283,27 @@ def api_refresh(scope: str = Query("full", pattern="^(full|priority)$")):
 # Front page
 # ---------------------------------------------------------------------------
 @app.get("/api/frontpage")
-def frontpage(limit: int = Query(16, ge=1, le=60)):
+def frontpage(limit: int = Query(16, ge=1, le=60), include_read: bool = False):
     hidden = personalise.hidden_story_ids()
+    hide_read = (not include_read
+                 and personalise.get_setting("hide_read", "on") == "on")
+    read = personalise.read_state() if hide_read else {}
+    skipped = {"count": 0}
+
+    def is_read(row) -> bool:
+        if not hide_read:
+            return False
+        read_at = read.get(row["id"])
+        # Updated since you read it? Then it is news to you again.
+        return read_at is not None and (row["last_updated_at"] or "") <= read_at
 
     def pick(rows, n, used):
         out = []
         for r in rows:
             if r["id"] in used or r["id"] in hidden:
+                continue
+            if is_read(r):
+                skipped["count"] += 1
                 continue
             used.add(r["id"])
             out.append(r)
@@ -298,20 +312,20 @@ def frontpage(limit: int = Query(16, ge=1, le=60)):
         return out
 
     used: set[str] = set()
-    top = pick(_story_rows(order="frontpage_score DESC", limit=limit * 4), limit, used)
-    latest = pick(_story_rows(order="datetime(last_updated_at) DESC", limit=limit * 4),
+    top = pick(_story_rows(order="frontpage_score DESC", limit=limit * 6), limit, used)
+    latest = pick(_story_rows(order="datetime(last_updated_at) DESC", limit=limit * 6),
                   limit, used)
     trending = pick(_story_rows("WHERE publisher_count > 1",
-                                order="trending_score DESC", limit=limit * 4), limit, used)
+                                order="trending_score DESC", limit=limit * 6), limit, used)
     fryslan = pick(_story_rows("WHERE geo_scope='fryslan'",
-                               order="frontpage_score DESC", limit=limit * 3), limit, used)
+                               order="frontpage_score DESC", limit=limit * 5), limit, used)
 
     categories = {}
     for slug, _label in config.CATEGORIES:
         if slug in ("fryslan", "overig"):
             continue
         rows = pick(_story_rows("WHERE category=?", (slug,),
-                                order="frontpage_score DESC", limit=limit * 2), 6, set())
+                                order="frontpage_score DESC", limit=limit * 3), 6, set())
         if rows:
             categories[slug] = _decorate(rows)
 
@@ -322,6 +336,8 @@ def frontpage(limit: int = Query(16, ge=1, le=60)):
         "trending": _decorate(trending),
         "fryslan": _decorate(fryslan),
         "categories": categories,
+        "read_skipped": skipped["count"],
+        "hide_read": hide_read,
         "empty": not (top or latest or trending or fryslan),
     }
 
@@ -450,7 +466,9 @@ def mynews(limit: int = Query(40, ge=1, le=100)):
         dst["discovery"] = src.get("discovery", False)
     personalise.store_recommendations(result["stories"])
     return {"cold_start": result["cold_start"], "has_favourites": result["has_favourites"],
-            "learned_count": result["learned_count"], "stories": decorated}
+            "learned_count": result["learned_count"],
+            "read_skipped": result["read_skipped"], "hide_read": result["hide_read"],
+            "stories": decorated}
 
 
 @app.post("/api/interactions")
@@ -459,6 +477,36 @@ def post_interaction(payload: dict = Body(...)):
     personalise.record_interaction(action, payload.get("story_id"),
                                    payload.get("article_id"), payload.get("publisher_id"))
     return {"ok": True}
+
+
+@app.get("/api/read")
+def api_read():
+    """Stories you have already read, most recently read first."""
+    rows = personalise.read_stories()
+    decorated = _decorate(rows)
+    for src, dst in zip(rows, decorated):
+        dst["read_at"] = src["read_at"]
+        dst["updated_since_read"] = src["updated_since_read"]
+    return {
+        "stories": decorated,
+        "total": len(decorated),
+        "hide_read": personalise.get_setting("hide_read", "on") == "on",
+    }
+
+
+@app.post("/api/read/unread")
+def api_mark_unread(payload: dict = Body(default={})):
+    """Put one story, or all of them, back on the front page."""
+    story_id = (payload or {}).get("story_id")
+    return {"ok": True, "restored": personalise.mark_unread(story_id)}
+
+
+@app.post("/api/settings/hide-read")
+def api_hide_read(payload: dict = Body(...)):
+    """Toggle whether read stories are filtered from the front page."""
+    enabled = bool(payload.get("enabled", True))
+    personalise.set_setting("hide_read", "on" if enabled else "off")
+    return {"ok": True, "hide_read": enabled}
 
 
 @app.get("/api/privacy")

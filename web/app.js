@@ -110,6 +110,8 @@ function storyCard(s, variant = '') {
     s.is_updating
       ? `<span class="chip live" title="${esc(DEVELOPING.tooltip)}">${esc(DEVELOPING.label)}</span>`
       : '',
+    s.updated_since_read
+      ? `<span class="chip new" title="Bijgewerkt nadat je het las">Nieuw sinds gelezen</span>` : '',
     s.category_label ? `<span class="chip cat">${esc(s.category_label)}</span>` : '',
     s.discovery ? `<span class="chip disc">Ontdekking</span>` : '',
   ].filter(Boolean).join('');
@@ -138,7 +140,9 @@ function storyCard(s, variant = '') {
         <button class="mini ${s.saved ? 'on' : ''}" data-act="save" data-id="${esc(s.id)}"
           aria-pressed="${!!s.saved}">${s.saved ? '★ Bewaard' : '☆ Bewaar'}</button>
         ${feedbackButtons(s)}
-        <button class="mini" data-act="hide" data-id="${esc(s.id)}">✕ Verberg</button>
+        ${s.read_at
+          ? `<button class="mini" data-unread="${esc(s.id)}" title="Terug naar de Voorpagina">↩ Ongelezen</button>`
+          : `<button class="mini" data-act="hide" data-id="${esc(s.id)}">✕ Verberg</button>`}
       </div>
     </div>
   </article>`;
@@ -156,6 +160,7 @@ const COLUMNS = {
   status:    { label: 'Status',     sort: (s) => (s.is_updating ? 1 : 0),     filter: 'status' },
   category:  { label: 'Categorie',  sort: (s) => s.category_label || '',      filter: 'select' },
   updated:   { label: 'Bijgewerkt', sort: (s) => new Date(s.last_updated_at || 0).getTime(), num: true },
+  readAt:    { label: 'Gelezen',    sort: (s) => new Date(s.read_at || 0).getTime(), num: true },
   why:       { label: 'Waarom',     sort: (s) => (s.reasons?.[0]?.text || '').toLowerCase(), filter: 'text' },
 };
 
@@ -163,6 +168,7 @@ function listColumns(ctx) {
   const cols = [];
   if (ctx.sections) cols.push('section');
   cols.push('title', 'publishers', 'status', 'category', 'updated');
+  if (ctx.read) cols.push('readAt');
   if (ctx.why) cols.push('why');
   return cols;
 }
@@ -254,9 +260,14 @@ function storyTable(rows, ctx = {}) {
           <span class="chip multi">${s.publisher_count}</span></td>`;
       }
       if (c === 'status') {
-        return `<td class="col-status">${s.is_updating
-          ? `<span class="chip live" title="${esc(DEVELOPING.tooltip)}">${esc(DEVELOPING.label)}</span>`
-          : '<span class="muted">—</span>'}</td>`;
+        const bits = [];
+        if (s.is_updating) {
+          bits.push(`<span class="chip live" title="${esc(DEVELOPING.tooltip)}">${esc(DEVELOPING.label)}</span>`);
+        }
+        if (s.updated_since_read) {
+          bits.push('<span class="chip new" title="Bijgewerkt nadat je het las">Nieuw</span>');
+        }
+        return `<td class="col-status">${bits.join(' ') || '<span class="muted">—</span>'}</td>`;
       }
       if (c === 'category') {
         return `<td class="col-category"><span class="chip cat">${esc(s.category_label || '')}</span></td>`;
@@ -265,6 +276,11 @@ function storyTable(rows, ctx = {}) {
         return `<td class="num col-updated" title="${esc(clock(s.last_updated_at))}">
           <span class="t-full">${ago(s.last_updated_at)}</span>
           <span class="t-short">${agoShort(s.last_updated_at)}</span></td>`;
+      }
+      if (c === 'readAt') {
+        return `<td class="num col-readAt" title="${esc(clock(s.read_at))}">
+          <span class="t-full">${ago(s.read_at)}</span>
+          <span class="t-short">${agoShort(s.read_at)}</span></td>`;
       }
       if (c === 'why') {
         const r = s.reasons?.[0]?.text || '';
@@ -284,7 +300,9 @@ function storyTable(rows, ctx = {}) {
         <button class="mini ${s.feedback === 'less' ? 'on' : ''}" data-act="less" data-id="${esc(s.id)}"
           aria-pressed="${s.feedback === 'less'}"
           title="${s.feedback === 'less' ? 'Minder zo — klik om ongedaan te maken' : 'Minder zo'}">👎</button>
-        <button class="mini" data-act="hide" data-id="${esc(s.id)}" title="Verberg">✕</button>
+        ${s.read_at
+          ? `<button class="mini" data-unread="${esc(s.id)}" title="Markeer als ongelezen">↩</button>`
+          : `<button class="mini" data-act="hide" data-id="${esc(s.id)}" title="Verberg">✕</button>`}
       </div></td></tr>`;
   }).join('');
 
@@ -398,11 +416,19 @@ async function viewFront() {
   try {
     const d = await API.get('/api/frontpage?limit=13');
     if (d.empty) {
-      main.innerHTML = emptyState('📭', 'Nog geen nieuws opgehaald',
-        'Klik op verversen om de feeds van de uitgevers op te halen.',
-        { label: 'Nieuws ophalen', action: 'refresh' });
+      main.innerHTML = d.read_skipped
+        ? viewToolbar() + emptyState('✅', 'Je bent helemaal bij',
+            `Alle ${d.read_skipped} actuele verhalen heb je al gelezen. `
+            + 'Nieuwe berichtgeving verschijnt hier vanzelf.',
+            { label: 'Naar gelezen artikelen', action: 'goto-read' })
+        : emptyState('📭', 'Nog geen nieuws opgehaald',
+            'Klik op verversen om de feeds van de uitgevers op te halen.',
+            { label: 'Nieuws ophalen', action: 'refresh' });
       return;
     }
+    const readNote = d.read_skipped
+      ? `<div class="readnote">✅ ${d.read_skipped} gelezen ${d.read_skipped === 1 ? 'verhaal' : 'verhalen'} verborgen ·
+         <a href="#/read">bekijk gelezen artikelen</a></div>` : '';
     const cats = Object.entries(d.categories || {})
       .map(([slug, items]) => section(
         state.meta?.categories.find((c) => c.slug === slug)?.label || slug,
@@ -425,11 +451,11 @@ async function viewFront() {
       add('Fryslân', d.fryslan);
       Object.entries(d.categories || {}).forEach(([slug, items]) =>
         add(state.meta?.categories.find((c) => c.slug === slug)?.label || slug, items));
-      main.innerHTML = viewToolbar() + tableHost(rows, { sections: true });
+      main.innerHTML = viewToolbar() + readNote + tableHost(rows, { sections: true });
       return;
     }
 
-    main.innerHTML = viewToolbar() +
+    main.innerHTML = viewToolbar() + readNote +
       section('Topverhalen', 'Gerangschikt op actualiteit, aantal onafhankelijke bronnen en nieuwswaarde',
               d.top, { lead: true }) +
       section('Laatste nieuws', 'Zojuist gepubliceerd of bijgewerkt', d.latest.slice(0, 8), { compact: true }) +
@@ -458,12 +484,50 @@ async function viewMyNews() {
         Elk verhaal toont waarom het hier staat.
         <a href="#/privacy" style="color:var(--accent);font-weight:700">Beheer je gegevens →</a></div>`;
     }
-    main.innerHTML = viewToolbar() + head + (d.stories.length
+    const readNote = d.read_skipped
+      ? `<div class="readnote">✅ ${d.read_skipped} gelezen ${d.read_skipped === 1 ? 'verhaal' : 'verhalen'} verborgen ·
+         <a href="#/read">bekijk gelezen artikelen</a></div>` : '';
+    main.innerHTML = viewToolbar() + head + readNote + (d.stories.length
       ? (state.view === 'list'
           ? tableHost(d.stories, { why: true })
           : `<div class="grid">${d.stories.map((s) => storyCard(s)).join('')}</div>`)
       : emptyState('🔍', 'Geen verhalen', 'Voeg onderwerpen toe of ververs het nieuws.',
         { label: 'Naar favorieten', action: 'favorites' }));
+  } catch (e) { main.innerHTML = errorState(e.message); }
+}
+
+async function viewRead() {
+  resetListState('read');
+  main.innerHTML = skeleton(6);
+  try {
+    const d = await API.get('/api/read');
+    const head = `
+      <section class="section">
+        <div class="section-head"><h2>Gelezen nieuwsartikelen</h2>
+          <span class="hint">${d.total} verhalen · recentst gelezen eerst</span></div>
+        <div class="notice">
+          <label class="switch">
+            <input type="checkbox" id="hideread" ${d.hide_read ? 'checked' : ''} />
+            <span>Verberg gelezen verhalen op de Voorpagina en Mijn nieuws</span>
+          </label>
+          <div style="margin-top:8px;font-size:13px">
+            Een verhaal dat ná jouw leesmoment is bijgewerkt verschijnt opnieuw —
+            dan is het weer nieuw voor je.
+          </div>
+          ${d.total ? `<div style="margin-top:12px">
+            <button class="btn ghost" data-action="unread-all">↩ Alles als ongelezen markeren</button>
+          </div>` : ''}
+        </div>
+      </section>`;
+
+    if (!d.total) {
+      main.innerHTML = head + emptyState('📖', 'Nog niets gelezen',
+        'Zodra je een verhaal opent, verschijnt het hier en verdwijnt het van de Voorpagina.');
+      return;
+    }
+    main.innerHTML = head + viewToolbar() + (state.view === 'list'
+      ? tableHost(d.stories, { read: true })
+      : `<div class="grid">${d.stories.map((s) => storyCard(s)).join('')}</div>`);
   } catch (e) { main.innerHTML = errorState(e.message); }
 }
 
@@ -772,6 +836,7 @@ function showWhy(storyId) {
 const routes = [
   [/^#\/front$/, viewFront],
   [/^#\/mynews$/, viewMyNews],
+  [/^#\/read$/, viewRead],
   [/^#\/favorites$/, viewFavorites],
   [/^#\/sources$/, viewSources],
   [/^#\/privacy$/, viewPrivacy],
@@ -909,6 +974,14 @@ document.addEventListener('click', async (ev) => {
     await API.post('/api/privacy/unhide', { story_id: unhide.dataset.unhide });
     viewPrivacy(); return;
   }
+  const unread = t.closest('[data-unread]');
+  if (unread) {
+    ev.preventDefault();
+    const row = document.querySelector(`[data-story="${CSS.escape(unread.dataset.unread)}"]`);
+    await API.post('/api/read/unread', { story_id: unread.dataset.unread });
+    if (row) { row.style.opacity = '.35'; setTimeout(() => row.remove(), 400); }
+    return;
+  }
   const srcDel = t.closest('[data-src-del]');
   if (srcDel) { await API.del(`/api/sources/${srcDel.dataset.srcDel}`); viewSources(); return; }
 
@@ -918,6 +991,7 @@ document.addEventListener('click', async (ev) => {
     if (a === 'reload') route();
     if (a === 'refresh') doRefresh();
     if (a === 'favorites') location.hash = '#/favorites';
+    if (a === 'goto-read') location.hash = '#/read';
     if (a === 'clearfilters') {
       state.listFilters = {};
       state.listSort = { key: '', dir: 'desc' };
@@ -932,13 +1006,25 @@ document.addEventListener('click', async (ev) => {
       await API.post('/api/privacy/unhide', {});
       viewPrivacy();
     }
+    if (a === 'unread-all') {
+      if (confirm('Alle gelezen verhalen weer als ongelezen markeren?')) {
+        await API.post('/api/read/unread', {});
+        viewRead();
+      }
+    }
     return;
   }
 
   if (t.closest('#backdrop') || t.closest('#sheet-close')) closeSheet();
 });
 
-document.addEventListener('change', (ev) => {
+document.addEventListener('change', async (ev) => {
+  if (ev.target.id === 'hideread') {
+    await API.post('/api/settings/hide-read', { enabled: ev.target.checked });
+    viewRead();
+    return;
+  }
+
   const lf = ev.target.closest('[data-lf]');
   if (lf) {
     const key = lf.dataset.lf;

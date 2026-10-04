@@ -115,7 +115,7 @@ user_preferences      user_interactions      recommendations
 | `topics` | slug, label, soort (topic/category/person/org/place) |
 | `story_topics` | story ↔ topic met gewicht |
 | `user_preferences` | expliciete favorieten + instellingen |
-| `user_interactions` | open, open_article, save, hide, more, less, feedback_clear (met tijdstempel) |
+| `user_interactions` | open, open_article, save, hide, unread, more, less, feedback_clear (met tijdstempel) |
 | `recommendations` | laatst geserveerde Mijn-nieuws-ranglijst met redenen |
 
 ---
@@ -182,6 +182,29 @@ Twee bewuste keuzes:
 De keuze kaarten/lijst wordt onthouden in `localStorage`. Op smalle schermen
 verbergt de tabel achtereenvolgens de minst essentiële kolommen, zodat titel,
 tijd en acties altijd zichtbaar blijven.
+
+## Gelezen nieuwsartikelen
+
+De Voorpagina en Mijn nieuws tonen standaard alleen wat **nieuw voor jou** is.
+Zodra je een verhaal opent (of doorklikt naar het artikel bij de uitgever),
+verhuist het naar de pagina **Gelezen** — met een melding op de voorpagina
+hoeveel verhalen er verborgen zijn.
+
+* **↩ Ongelezen** per verhaal, of **Alles als ongelezen markeren**, zet ze terug.
+* De schakelaar **"Verberg gelezen verhalen"** op de Gelezen-pagina zet het
+  hele gedrag uit; dan werkt de voorpagina weer als vanouds.
+* De lijstweergave krijgt een extra kolom **Gelezen** (wanneer je het las),
+  sorteerbaar net als de andere kolommen.
+
+**Bijgewerkte verhalen komen terug.** Een verhaal blijft alleen verborgen
+zolang het hetzelfde verhaal is dat je gelezen hebt. Komt er daarna nieuwe
+berichtgeving bij, dan is het weer nieuws voor jou en verschijnt het opnieuw op
+de voorpagina met het label **Nieuw sinds gelezen**. Zonder die regel zou een
+lopend dossier na één klik voorgoed onzichtbaar blijven, juist op het moment
+dat er iets gebeurt.
+
+Zoeken, categorie- en onderwerppagina's filteren **niet** op gelezen: daar zoek
+je bewust iets op en wil je alles zien.
 
 ## Ranking
 
@@ -278,7 +301,9 @@ geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 | `GET /api/health` | Status, aantallen, laatste run |
 | `GET /api/meta` | Categorieën, uitgevers, bronnen, prioriteitsvlag per bron, gedegradeerde feeds |
 | `POST /api/refresh?scope=full\|priority` | Handmatig ophalen + herclusteren |
-| `GET /api/frontpage` | Top / Laatste / Trending / Fryslân / per categorie |
+| `GET /api/frontpage` | Top / Laatste / Trending / Fryslân / per categorie (`include_read=true` toont ook gelezen verhalen) |
+| `GET /api/read`, `POST /api/read/unread` | Gelezen artikelen en ze terugzetten |
+| `POST /api/settings/hide-read` | Gelezen verhalen wel/niet verbergen |
 | `GET /api/stories` | Zoeken + filteren op `q, topic, publisher, category, location, hours, saved` |
 | `GET /api/stories/{id}` | Verhaaldetail met tijdlijn, bronartikelen, gerelateerd |
 | `GET /api/topics` | Topics met zoekopdracht en verhaaltelling |
@@ -328,6 +353,7 @@ py -3.12 tools_profile.py priority     # tijdsverdeling van een ronde meten
 py -3.12 tools_badge_audit.py          # welke verhalen 'Ontwikkelt zich' tonen en waarom
 py -3.12 tools_test_feedback.py        # duim omhoog/omlaag-toestandsmachine testen
 py -3.12 tools_test_toggles.py         # verbergen/bewaren-toggles testen
+py -3.12 tools_test_read.py            # gelezen/ongelezen-logica testen
 py -3.12 tools_profile_inspect.py      # favorieten, feedback en signalen bekijken
 py -3.12 tools_remove_publisher.py id  # uitgever + artikelen verwijderen
 ```
