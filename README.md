@@ -129,6 +129,43 @@ artikelen. Een Tweakers-artikel is altijd tech, maar het verhaal waarin het
 belandt kan anders worden gelabeld — de Paramount/Warner-fusie staat onder
 entertainment omdat NU.nl en AD het zo brengen.
 
+### Zelf een bron toevoegen: eerst controleren, dan bevestigen
+
+Je hoeft geen feed-URL te kennen. Plak op **Bronnen** gewoon het adres van de
+site (`tweakers.net`, `nrc.nl`) en druk op **Controleren**. `app/ingest/discover.py`
+haalt die URL op en komt met één van vier uitkomsten:
+
+| Uitkomst | Wat er gebeurt |
+|----------|----------------|
+| `feed` | De URL is zelf een geldige feed. Direct toe te voegen. |
+| `gated` | De pagina zit achter een toestemmingsscherm. Dat wordt **niet** omzeild; in plaats daarvan worden open feeds van dezelfde uitgever gezocht en ter bevestiging getoond. |
+| `html` | Een gewone webpagina. De `<link rel="alternate">`-tags en bekende feedpaden worden afgezocht. |
+| `error` | Onbereikbaar of 404. Je krijgt de echte foutmelding, geen stille mislukking. |
+
+Elke kandidaat wordt **eerst opgehaald en geparsed** voordat hij wordt
+voorgesteld. Je ziet de feedtitel, het aantal artikelen, of er afbeeldingen in
+zitten en de nieuwste kop — genoeg om te zien of het de juiste feed is. Pas als
+je op **Toevoegen** klikt wordt hij opgeslagen.
+
+Twee dingen waar de zoekroutine rekening mee houdt:
+
+* **De gate verwijst door naar een ander domein.** `tweakers.net` stuurt je naar
+  `myprivacy.dpgmedia.nl`. Er wordt daarom altijd doorgezocht op de
+  *oorspronkelijke* host, niet op het doel van de redirect — anders zoek je
+  feeds bij de consent-leverancier.
+* **Feeds staan vaak op een zusterhost.** `nos.nl` → `feeds.nos.nl`,
+  `rtl.nl` → `rtlnieuws.nl`. `_host_variants()` probeert `feeds.X`, `nieuws.X`,
+  `<merk>nieuws.<tld>` en www-varianten.
+
+`POST /api/sources` weigert een URL die niet geverifieerd is (HTTP 422, mét de
+gevonden alternatieven). Dat voorkomt dat een gate-pagina of een 404 in de
+bronnenlijst belandt en bij elke verversing een fout meldt. De controle duurt
+ongeveer 10 seconden omdat er tot 44 kandidaat-URL's parallel worden getest.
+
+Verwijder je de laatste feed van een zelf toegevoegde uitgever, dan verdwijnt
+die uitgever mee — anders blijft er een lege uitgever in de lijst staan.
+`tools_orphans.py` spoort zulke wezen op (`--purge` ruimt ze op).
+
 ---
 
 ## Datamodel (SQLite, `data/nieuws.db`)
@@ -383,6 +420,7 @@ geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 | `POST /api/interactions` | Gedragssignaal vastleggen |
 | `GET /api/privacy`, `POST /api/privacy/{reset,forget,unhide}` | Inzage, wissen en verborgen verhalen terugzetten |
 | `GET POST PATCH DELETE /api/sources` | Eigen bronnen beheren |
+| `POST /api/sources/probe` | Een URL controleren: feed, consent-gate, gewone pagina of fout — met geverifieerde feed-kandidaten |
 
 ---
 

@@ -359,6 +359,34 @@ button.why.linkish {
   .hidden-row .mini { align-self: flex-start; }
 }
 
+/* ---------- source probe (add a publisher) ---------- */
+.probe {
+  border: 1px solid var(--border); border-left: 3px solid var(--muted);
+  border-radius: 10px; padding: 13px 16px; margin: 0 0 18px; background: var(--surface);
+}
+.probe-ok { border-left-color: var(--ok); }
+.probe-warn { border-left-color: var(--warn); }
+.probe-err { border-left-color: var(--accent); }
+.probe-msg { font-size: 14px; color: var(--text); line-height: 1.5; }
+.cand-list { display: grid; gap: 8px; margin-top: 12px; }
+.cand {
+  display: flex; align-items: center; gap: 14px; padding: 11px 13px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+}
+.cand.dim { opacity: .6; }
+.cand:hover { border-color: var(--accent); }
+.cand-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cand-body strong { font-size: 14.5px; }
+.cand-url { font-size: 12px; color: var(--muted); word-break: break-all; }
+.cand-meta { font-size: 12px; color: var(--faint); }
+.cand-sample { font-size: 12.5px; color: var(--muted); font-style: italic;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cand .btn { flex: none; padding: 8px 16px; }
+@media (max-width: 620px) {
+  .cand { flex-direction: column; align-items: stretch; }
+  .cand .btn { align-self: flex-start; }
+}
+
 /* ---------- filters ---------- */
 .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
 .filters select, .filters input {

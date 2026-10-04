@@ -740,14 +740,16 @@ async function viewSources() {
       <section class="section">
         <div class="section-head"><h2>Bronnen</h2>
           <span class="hint">Voeg zelf uitgevers of feeds toe</span></div>
-        <form class="addrow" id="addsrc">
-          <input name="publisher_name" placeholder="Naam uitgever (bijv. Trouw)" required />
-          <input name="url" placeholder="RSS-feed URL (https://…/rss.xml)" required />
-          <button type="submit">Bron toevoegen</button>
+        <form class="addrow" id="probesrc">
+          <input name="url" id="probeurl" placeholder="Plak een site- of feed-URL, bijv. tweakers.net"
+                 autocomplete="off" required />
+          <button type="submit">Controleren</button>
         </form>
+        <div id="proberesult"></div>
         <div class="notice">We gebruiken alleen officiële, openbaar beschikbare feeds.
-          Bronnen achter een inlog, betaalmuur of toestemmingsscherm worden overgeslagen
-          en hier als <span class="dot-err">●</span> gemeld.</div>
+          Plak gerust het adres van de website — we zoeken de feed er zelf bij.
+          Staat een pagina achter een toestemmingsscherm, dan wordt dat
+          <strong>niet omzeild</strong>; we kijken dan of er een open feed naast staat.</div>
         <table class="src-table">
           <thead><tr><th></th><th>Uitgever</th><th>Feed</th><th>Laatste check</th><th>Items</th><th></th></tr></thead>
           <tbody>${d.sources.map((s) => `
@@ -764,6 +766,37 @@ async function viewSources() {
         </table>
       </section>`;
   } catch (e) { main.innerHTML = errorState(e.message); }
+}
+
+/* Render what the probe found: either a single valid feed, or alternatives to
+   confirm. Nothing is ever added without an explicit click. */
+function renderProbe(d) {
+  const box = document.querySelector('#proberesult');
+  if (!box) return;
+  const icon = { feed: '✅', gated: '🔒', html: '🔎', error: '⚠️' }[d.status] || '🔎';
+  const tone = d.status === 'feed' ? 'ok' : d.status === 'error' ? 'err' : 'warn';
+
+  const card = (c) => `
+    <div class="cand${c.already_added ? ' dim' : ''}">
+      <div class="cand-body">
+        <strong>${esc(c.title)}</strong>
+        <span class="cand-url">${esc(c.url)}</span>
+        <span class="cand-meta">${c.item_count} artikelen · ${c.has_images
+          ? 'met afbeeldingen' : 'zonder afbeeldingen'}</span>
+        ${c.sample ? `<span class="cand-sample">Nieuwste: “${esc(c.sample)}”</span>` : ''}
+      </div>
+      ${c.already_added
+        ? '<span class="chip">Al toegevoegd</span>'
+        : `<button class="btn" data-add-feed="${esc(c.url)}"
+             data-title="${esc(c.title)}">Toevoegen</button>`}
+    </div>`;
+
+  box.innerHTML = `
+    <div class="probe probe-${tone}">
+      <div class="probe-msg">${icon} ${esc(d.message)}</div>
+      ${(d.candidates || []).length
+        ? `<div class="cand-list">${d.candidates.map(card).join('')}</div>` : ''}
+    </div>`;
 }
 
 async function viewPrivacy() {
@@ -1056,6 +1089,32 @@ document.addEventListener('click', async (ev) => {
   const srcDel = t.closest('[data-src-del]');
   if (srcDel) { await API.del(`/api/sources/${srcDel.dataset.srcDel}`); viewSources(); return; }
 
+  const addFeed = t.closest('[data-add-feed]');
+  if (addFeed) {
+    ev.preventDefault();
+    const url = addFeed.dataset.addFeed;
+    // The feed title is the publisher name by default; let the user adjust it,
+    // because "TR: homepage" is a feed name, not a publisher name.
+    const suggested = (addFeed.dataset.title || '').split(/[:|–—]/)[0].trim();
+    const name = prompt('Onder welke naam wil je deze uitgever opslaan?', suggested);
+    if (name === null) return;
+    addFeed.disabled = true;
+    addFeed.textContent = 'Toevoegen…';
+    try {
+      // verified: the probe already fetched and parsed this exact URL.
+      await API.post('/api/sources', {
+        url, publisher_name: name.trim() || suggested,
+        name: addFeed.dataset.title, verified: true,
+      });
+      viewSources();
+    } catch (e) {
+      addFeed.disabled = false;
+      addFeed.textContent = 'Toevoegen';
+      alert('Toevoegen mislukt: ' + e.message);
+    }
+    return;
+  }
+
   const action = t.closest('[data-action]');
   if (action) {
     const a = action.dataset.action;
@@ -1146,13 +1205,24 @@ document.addEventListener('submit', async (ev) => {
     $('#favinput').value = '';
     viewFavorites();
   }
-  if (ev.target.id === 'addsrc') {
+  if (ev.target.id === 'probesrc') {
     ev.preventDefault();
-    const fd = new FormData(ev.target);
+    const input = document.querySelector('#probeurl');
+    const btn = ev.target.querySelector('button');
+    const url = input.value.trim();
+    if (!url) return;
+    btn.disabled = true;
+    const was = btn.textContent;
+    btn.textContent = 'Bezig…';
+    document.querySelector('#proberesult').innerHTML =
+      '<div class="probe probe-warn"><div class="probe-msg">🔎 Bezig met controleren van de URL '
+      + 'en zoeken naar feeds… dit duurt ongeveer 10 seconden.</div></div>';
     try {
-      await API.post('/api/sources', Object.fromEntries(fd));
-      viewSources();
-    } catch (e) { alert('Toevoegen mislukt: ' + e.message); }
+      renderProbe(await API.post('/api/sources/probe', { url }));
+    } catch (e) {
+      document.querySelector('#proberesult').innerHTML =
+        `<div class="probe probe-err"><div class="probe-msg">⚠️ Controle mislukt: ${esc(e.message)}</div></div>`;
+    } finally { btn.disabled = false; btn.textContent = was; }
   }
 });
 

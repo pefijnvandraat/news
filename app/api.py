@@ -15,6 +15,7 @@ import os
 from . import config, personalise
 from .cluster import recluster
 from .db import init_db, one, query, tx
+from .ingest.discover import discover
 from .ingest.pipeline import priority_source_ids, run_ingest
 from .ranking import (compute_front_page_scores, load_story_topics,
                       parse_json_list, story_publishers)
@@ -559,21 +560,51 @@ def get_sources():
         "publishers": [dict(r) for r in query("SELECT * FROM publishers ORDER BY name")]}
 
 
+@app.post("/api/sources/probe")
+def probe_source(payload: dict = Body(...)):
+    """Inspect a URL before adding it.
+
+    Reports whether it is a feed, a normal page or a consent-gated page, and
+    lists the publisher's real feeds so the user can confirm one instead of
+    getting a bare failure.
+    """
+    result = discover((payload or {}).get("url") or "")
+    known = {r["url"] for r in query("SELECT url FROM sources")}
+    for c in result.get("candidates", []):
+        c["already_added"] = c["url"] in known
+    return result
+
+
 @app.post("/api/sources")
 def add_source(payload: dict = Body(...)):
     url = (payload.get("url") or "").strip()
     pub_name = (payload.get("publisher_name") or "").strip()
     if not url.startswith("http") or not pub_name:
         raise HTTPException(400, "publisher_name en een geldige feed-url zijn verplicht")
+
+    # Never store an unverified URL: a gated page or a 404 would sit in the
+    # source list reporting an error on every refresh. The UI probes first,
+    # but the endpoint has to stand on its own.
+    if not payload.get("verified"):
+        check = discover(url)
+        if check["status"] != "feed":
+            raise HTTPException(422, {
+                "message": check["message"],
+                "status": check["status"],
+                "candidates": check.get("candidates", []),
+            })
+
     pub_id = (payload.get("publisher_id") or slugify(pub_name))[:40]
     ts = iso(now())
     with tx() as c:
         if not c.execute("SELECT id FROM publishers WHERE id=?", (pub_id,)).fetchone():
-            c.execute("INSERT INTO publishers(id,name,homepage,region,weight,colour,enabled,"
-                      "user_added,created_at) VALUES(?,?,?,?,?,?,1,1,?)",
+            c.execute("INSERT INTO publishers(id,name,homepage,region,weight,colour,"
+                      "default_category,enabled,user_added,created_at) "
+                      "VALUES(?,?,?,?,?,?,?,1,1,?)",
                       (pub_id, pub_name, payload.get("homepage"),
                        payload.get("region") or "nl", 0.9,
-                       payload.get("colour") or "#6b7280", ts))
+                       payload.get("colour") or "#6b7280",
+                       payload.get("default_category"), ts))
         if c.execute("SELECT id FROM sources WHERE url=?", (url,)).fetchone():
             raise HTTPException(409, "Deze feed bestaat al")
         c.execute("INSERT INTO sources(id,publisher_id,name,url,kind,category_hint,enabled,"
@@ -587,7 +618,19 @@ def add_source(payload: dict = Body(...)):
 @app.delete("/api/sources/{source_id}")
 def delete_source(source_id: str):
     with tx() as c:
-        c.execute("DELETE FROM sources WHERE id=? AND user_added=1", (source_id,))
+        row = c.execute("SELECT publisher_id FROM sources WHERE id=? AND user_added=1",
+                        (source_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Onbekende bron, of een ingebouwde bron "
+                                     "die niet verwijderd kan worden")
+        c.execute("DELETE FROM sources WHERE id=?", (source_id,))
+        # Drop the publisher too once its last feed is gone, otherwise an
+        # add-then-remove leaves an empty publisher in the list forever.
+        left = c.execute("SELECT COUNT(*) FROM sources WHERE publisher_id=?",
+                         (row["publisher_id"],)).fetchone()[0]
+        if not left:
+            c.execute("DELETE FROM publishers WHERE id=? AND user_added=1",
+                      (row["publisher_id"],))
     return {"ok": True}
 
 
