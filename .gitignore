@@ -1,0 +1,23 @@
+# Personal data — never publish. Contains reading history, favourites
+# and inferred interests belonging to the local user.
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Scratch files from local experimentation (note: must not match __init__.py)
+/_scratch*.py
+/*.png

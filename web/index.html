@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="nl" data-theme="auto">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Nieuws — persoonlijke Nederlandse nieuwsaggregator</title>
+<link rel="stylesheet" href="/static/styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📰</text></svg>" />
+</head>
+<body>
+<a class="skip" href="#main">Naar hoofdinhoud</a>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <button class="burger" id="burger" aria-label="Menu" aria-expanded="false">☰</button>
+    <a class="brand" href="#/front" aria-label="Nieuws, naar voorpagina">
+      <span class="brand-mark">N</span>
+      <span class="brand-text">Nieuws</span>
+    </a>
+
+    <nav class="mainnav" id="mainnav" aria-label="Hoofdnavigatie">
+      <a href="#/front" data-route="front">Voorpagina</a>
+      <a href="#/mynews" data-route="mynews">Mijn nieuws</a>
+      <a href="#/favorites" data-route="favorites">Favorieten</a>
+    </nav>
+
+    <form class="search" id="searchform" role="search">
+      <input id="search" type="search" placeholder="Zoek verhalen, onderwerpen…" aria-label="Zoeken" />
+      <button type="submit" aria-label="Zoeken">⌕</button>
+    </form>
+
+    <div class="topbar-actions">
+      <button id="refresh" class="icon-btn" title="Nieuws verversen" aria-label="Verversen">⟳</button>
+      <button id="theme" class="icon-btn" title="Licht/donker" aria-label="Thema wisselen">◐</button>
+    </div>
+  </div>
+  <div class="status-strip" id="statusstrip" hidden></div>
+</header>
+
+<main id="main" class="main"></main>
+
+<div class="sheet-backdrop" id="backdrop" hidden></div>
+<aside class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+  <div class="sheet-head">
+    <h2 id="sheet-title">Details</h2>
+    <button class="icon-btn" id="sheet-close" aria-label="Sluiten">✕</button>
+  </div>
+  <div class="sheet-body" id="sheet-body"></div>
+</aside>
+
+<footer class="foot">
+  <span>Automatisch samengestelde verhalen op basis van officiële RSS-feeds van NU.nl, NOS, RTL Nieuws, Omrop Fryslân en AD.</span>
+  <span>Samenvattingen zijn <strong>automatisch gegenereerd</strong> uit de teksten van de uitgevers. Volg altijd de bronlinks voor het originele artikel.</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
