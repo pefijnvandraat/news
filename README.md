@@ -92,9 +92,42 @@ geen paywalls, geen logins, geen consent-schermen, geen robots.txt-overtredingen
 | RTL Nieuws | `rtlnieuws.nl/rss.xml` — de officiële open feed. `rtl.nl/rss/*` is slechts een redirect door een consent-gate en wordt **niet** omzeild |
 | Omrop Fryslân | `omropfryslan.nl/rss/nieuws` (hun `/rss/<pad>`-varianten geven allemaal dezelfde feed terug) |
 | AD | `ad.nl/{nieuws,binnenland,buitenland,politiek,economie,tech,sport,show}/rss.xml` |
+| Tweakers | `tweakers.net/feeds/nieuws.xml` (alleen nieuws; `mixed.xml` bevat ook reviews) |
+| Bright | `bright.nl/rss` |
 
 Als een bron wegvalt, degradeert alleen die bron. De statusbalk bovenin en
 **Bronnen beheren** tonen precies welke feed faalde en waarom.
+
+### Over het consent-scherm
+
+Tweakers en Bright tonen bij een gewoon bezoek een toestemmingsscherm, maar hun
+**RSS-endpoints staan daarbuiten** en zijn direct bereikbaar. Dat geldt ook voor
+RTL: `rtl.nl/rss/*` loopt door de gate, `rtlnieuws.nl/rss.xml` niet. Er wordt
+dus niets omzeild — er is simpelweg een officiële, open feed naast de
+afgeschermde website. Kom je ooit een bron tegen die wél alleen achter een gate
+zit, dan rapporteert de adapter die als gedegradeerd in plaats van hem te
+forceren.
+
+### Standaardcategorie per uitgever
+
+Een specialistische titel labelt zijn eigen feed vaak generiek: Bright zet
+vrijwel alles onder "Nieuws", Tweakers gebruikt een eigen hiërarchie
+(`Nieuws / IT Pro / Politiek en recht`). Een uitgever heeft daarom een
+`default_category` die gebruikt wordt zodra de feed niets bruikbaars zegt —
+`tech` voor Tweakers en Bright, `fryslan` voor Omrop Fryslân.
+
+Twee bewuste keuzes in de Tweakers-mapping:
+
+* **`Politiek en recht` → tech**, niet politiek. Het gaat over techwetgeving en
+  arrestaties van hackers; wie op "Politiek" klikt verwacht het kabinet.
+* **`Gaming` → tech**, niet entertainment. Het is hardware- en industrienieuws
+  ("AMD-driver verwijst naar mogelijke gpu PS6"). Zo blijft Entertainment
+  voorbehouden aan AD Show en NU Achterklap.
+
+Let op: de categorie van een *verhaal* is een meerderheidsstem over zijn
+artikelen. Een Tweakers-artikel is altijd tech, maar het verhaal waarin het
+belandt kan anders worden gelabeld — de Paramount/Warner-fusie staat onder
+entertainment omdat NU.nl en AD het zo brengen.
 
 ---
 
@@ -108,7 +141,7 @@ user_preferences      user_interactions      recommendations
 
 | Tabel | Kern |
 |-------|------|
-| `publishers` | id, naam, homepage, regio, gewicht, kleur, user_added |
+| `publishers` | id, naam, homepage, regio, gewicht, kleur, `default_category`, user_added |
 | `sources` | feed-url, kind (`rss`/`html`), categorie-hint, gezondheidsstatus |
 | `articles` | kop, uitgever, originele URL, canonical URL + hash (dedupe), publicatie-/updatetijd, categorie, afbeelding, beschrijving, taal, geo-scope + plaatsen, topics, entiteiten, tokens, revisie, story_id |
 | `stories` | neutrale kop + bronuitgever, gegenereerde samenvatting, categorie, geo-scope, aantal artikelen/uitgevers, eerste/laatste tijd, centroid, entiteiten, tegenstrijdigheden, is_updating, importance/frontpage/trending-scores |
@@ -394,6 +427,7 @@ py -3.12 tools_test_toggles.py         # verbergen/bewaren-toggles testen
 py -3.12 tools_test_read.py            # gelezen/ongelezen-logica testen
 py -3.12 tools_test_follow.py          # volgen-logica testen
 py -3.12 tools_future_dates.py         # artikelen met toekomstige datum tonen
+py -3.12 tools_check_publisher.py id   # categorisering van één uitgever bekijken
 py -3.12 tools_profile_inspect.py      # favorieten, feedback en signalen bekijken
 py -3.12 tools_remove_publisher.py id  # uitgever + artikelen verwijderen
 ```

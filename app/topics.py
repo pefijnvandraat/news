@@ -265,13 +265,14 @@ def geo_scope(title: str, description: str, publisher_id: str) -> tuple[str, lis
 
 def map_category(raw: str | None, url: str = "", hint: str | None = None,
                  publisher_id: str | None = None, scope: str | None = None,
-                 topic_slugs: list[str] | None = None) -> str:
+                 topic_slugs: list[str] | None = None,
+                 publisher_default: str | None = None) -> str:
     """Normalise a publisher category onto our taxonomy.
 
     Priority: specific URL segment > specific feed category > feed hint >
-    detected topics > geography. Generic labels such as 'nieuws' or 'artikel'
-    never win, because publishers put the real section *after* them
-    (e.g. rtl.nl/nieuws/buitenland/...).
+    detected topics > the publisher's own default > geography. Generic labels
+    such as 'nieuws' or 'artikel' never win, because publishers put the real
+    section *after* them (e.g. rtl.nl/nieuws/buitenland/...).
     """
     from .config import CATEGORY_ALIASES, GENERIC_CATEGORY_TOKENS
 
@@ -290,9 +291,10 @@ def map_category(raw: str | None, url: str = "", hint: str | None = None,
             return found
     if hint in CATEGORY_ALIASES.values():
         return hint
-    # A regional broadcaster's own newsroom feed is regional news by default.
-    if publisher_id == "omrop":
-        return "fryslan"
+    # A specialist title (regional broadcaster, tech site) is a better guess
+    # than anything we can infer from a generic "Nieuws" label.
+    if publisher_default:
+        return publisher_default
     for slug in topic_slugs or []:
         if slug in TOPIC_TO_CATEGORY:
             return TOPIC_TO_CATEGORY[slug]

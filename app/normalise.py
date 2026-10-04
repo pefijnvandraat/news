@@ -6,6 +6,7 @@ clustering, ranking and the API never see feed quirks.
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
 
 from . import topics as T
@@ -31,6 +32,28 @@ def _clamp_future(dt, seen_at):
     return seen_at if dt - seen_at > FUTURE_TOLERANCE else dt
 
 
+_AUTHOR_EMAIL = re.compile(r"^\s*\S+@\S+\s*\((.+)\)\s*$")
+
+
+def clean_author(value: str | None) -> str | None:
+    """RSS allows 'mail@example.com (Name)'; show the name, not the address."""
+    if not value:
+        return None
+    m = _AUTHOR_EMAIL.match(value)
+    name = (m.group(1) if m else value).strip()
+    # A bare address with no name is noise, not attribution.
+    if not name or ("@" in name and " " not in name):
+        return None
+    return name[:120]
+
+
+def _first_category(value) -> str | None:
+    """Feeds may repeat <category>; the first is the most specific one."""
+    if isinstance(value, (list, tuple)):
+        return str(value[0]) if value else None
+    return str(value) if value else None
+
+
 def normalise(item: RawItem, source: dict) -> dict | None:
     """Turn a RawItem into a dict matching the `articles` table, or None if unusable."""
     title = strip_html(item.title)
@@ -53,8 +76,9 @@ def normalise(item: RawItem, source: dict) -> dict | None:
     scope, places = T.geo_scope(title, description or "", source["publisher_id"])
     entities = T.extract_entities(title, description or "")
     topic_slugs = T.detect_topics(title, description or "", None, entities)
-    category = T.map_category(item.category, url, source.get("category_hint"),
-                              source["publisher_id"], scope, topic_slugs)
+    category = T.map_category(_first_category(item.category), url,
+                              source.get("category_hint"), source["publisher_id"],
+                              scope, topic_slugs, source.get("default_category"))
     if category not in topic_slugs:
         topic_slugs.append(category)
     tokens = T.tokenize(title) * 2 + T.tokenize(description or "")
@@ -69,7 +93,7 @@ def normalise(item: RawItem, source: dict) -> dict | None:
         "title": title,
         "description": description,
         "image_url": _clean_image(item.image_url),
-        "author": (item.author or None),
+        "author": clean_author(item.author),
         "category": category,
         "language": (item.language or "nl")[:5],
         "published_at": iso(published),
@@ -99,7 +123,9 @@ def renormalise_all() -> int:
 
     rows = [dict(r) for r in query(
         "SELECT a.id, a.title, a.description, a.url, a.publisher_id, a.category, "
-        "s.category_hint FROM articles a LEFT JOIN sources s ON s.id = a.source_id")]
+        "s.category_hint, p.default_category FROM articles a "
+        "LEFT JOIN sources s ON s.id = a.source_id "
+        "LEFT JOIN publishers p ON p.id = a.publisher_id")]
     updates = []
     for r in rows:
         title, desc = r["title"], r["description"] or ""
@@ -107,7 +133,8 @@ def renormalise_all() -> int:
         entities = T.extract_entities(title, desc)
         slugs = T.detect_topics(title, desc, None, entities)
         category = T.map_category(None, r["url"], r["category_hint"],
-                                  r["publisher_id"], scope, slugs)
+                                  r["publisher_id"], scope, slugs,
+                                  r["default_category"])
         if category not in slugs:
             slugs.append(category)
         tokens = T.tokenize(title) * 2 + T.tokenize(desc)

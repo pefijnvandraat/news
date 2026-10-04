@@ -21,15 +21,16 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
 CREATE TABLE IF NOT EXISTS publishers (
-    id           TEXT PRIMARY KEY,
-    name         TEXT NOT NULL,
-    homepage     TEXT,
-    region       TEXT,                 -- 'nl' | 'fryslan'
-    weight       REAL NOT NULL DEFAULT 1.0,
-    colour       TEXT,
-    enabled      INTEGER NOT NULL DEFAULT 1,
-    user_added   INTEGER NOT NULL DEFAULT 0,
-    created_at   TEXT NOT NULL
+    id               TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    homepage         TEXT,
+    region           TEXT,                 -- 'nl' | 'fryslan'
+    weight           REAL NOT NULL DEFAULT 1.0,
+    colour           TEXT,
+    default_category TEXT,                 -- fallback when the feed says nothing useful
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    user_added       INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sources (
@@ -191,7 +192,19 @@ def tx():
 def init_db() -> None:
     conn = connect()
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the first release.
+
+    CREATE TABLE IF NOT EXISTS leaves existing tables untouched, so new columns
+    have to be added explicitly for databases created by an earlier version.
+    """
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(publishers)")}
+    if "default_category" not in have:
+        conn.execute("ALTER TABLE publishers ADD COLUMN default_category TEXT")
 
 
 def query(sql: str, params: Iterable[Any] = ()) -> list[sqlite3.Row]:

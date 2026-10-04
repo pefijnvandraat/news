@@ -58,8 +58,13 @@ def _record(report: dict) -> None:
 
 
 def load_sources(source_ids: list[str] | None = None) -> list[dict]:
-    """Enabled sources, optionally narrowed to an explicit set."""
-    sql = ("SELECT s.* FROM sources s JOIN publishers p ON p.id = s.publisher_id "
+    """Enabled sources, optionally narrowed to an explicit set.
+
+    Carries the publisher's default_category so normalisation can fall back to
+    it when a feed labels everything "Nieuws".
+    """
+    sql = ("SELECT s.*, p.default_category FROM sources s "
+           "JOIN publishers p ON p.id = s.publisher_id "
            "WHERE s.enabled=1 AND p.enabled=1")
     params: tuple = ()
     if source_ids:

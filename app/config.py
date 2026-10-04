@@ -38,6 +38,21 @@ CATEGORY_ALIASES: dict[str, str] = {
     "economie": "economie", "geld": "economie", "werk": "economie",
     "beurs": "economie", "business": "economie", "auto": "economie",
     "tech": "tech", "technologie": "tech", "digitaal": "tech", "wetenschap": "tech",
+    # Tweakers labels items as "Nieuws / <sectie> / <subsectie>"; these are the
+    # recurring sections. Their "Politiek en recht" is tech law and regulation,
+    # not Dutch cabinet politics, so it stays under tech where readers expect it.
+    "it-pro": "tech", "computers": "tech", "hardware": "tech", "software": "tech",
+    "pc-s": "tech", "processors": "tech", "videokaarten": "tech", "opslag": "tech",
+    "tablets-en-telefoons": "tech", "smartphones": "tech", "e-readers": "tech",
+    "beeld-en-geluid": "tech", "mediaspelers": "tech", "televisies": "tech",
+    "internettoegang": "tech", "websites-en-community-s": "tech",
+    "politiek-en-recht": "tech", "singleboardcomputers": "tech",
+    "security": "tech", "privacy": "tech", "apps": "tech", "ai": "tech",
+    "economie-en-maatschappij": "economie",
+    # Gaming on a tech site is hardware and industry news ("AMD-driver verwijst
+    # naar mogelijke gpu PS6"), not showbiz. Entertainment stays reserved for
+    # AD Show / NU Achterklap so it keeps meaning something.
+    "gaming": "tech", "games": "tech", "consoles": "tech",
     "sport": "sport", "voetbal": "sport", "wielrennen": "sport", "sporten": "sport",
     "schaatsen": "sport", "formule-1": "sport", "tennis": "sport", "darts": "sport",
     "cultuur": "cultuur", "cultuur-en-media": "cultuur", "boeken": "cultuur",
@@ -54,6 +69,7 @@ CATEGORY_ALIASES: dict[str, str] = {
 GENERIC_CATEGORY_TOKENS = {
     "nieuws", "news", "algemeen", "artikel", "article", "video", "videos",
     "live", "l", "nl", "fy", "index", "rss", "feed", "explainers", "overig",
+    "reviews", "review", "achtergrond", "dossiers", "onderwerpen", "nieuwsbrief",
 }
 
 # ---------------------------------------------------------------------------
@@ -67,9 +83,18 @@ PUBLISHERS: list[dict] = [
     {"id": "rtl", "name": "RTL Nieuws", "homepage": "https://www.rtl.nl/nieuws",
      "region": "nl", "weight": 1.0, "colour": "#0a4ea2"},
     {"id": "omrop", "name": "Omrop Frysl\u00e2n", "homepage": "https://www.omropfryslan.nl/nl/nieuws",
-     "region": "fryslan", "weight": 0.95, "colour": "#0a7d4b"},
+     "region": "fryslan", "weight": 0.95, "colour": "#0a7d4b",
+     "default_category": "fryslan"},
     {"id": "ad", "name": "AD", "homepage": "https://www.ad.nl/nieuws/",
      "region": "nl", "weight": 1.0, "colour": "#e2001a"},
+    # Specialist tech titles. Their feeds label almost everything "Nieuws", so
+    # the publisher default carries the category instead of the feed.
+    {"id": "tweakers", "name": "Tweakers", "homepage": "https://tweakers.net/",
+     "region": "nl", "weight": 0.9, "colour": "#e4454f",
+     "default_category": "tech"},
+    {"id": "bright", "name": "Bright", "homepage": "https://www.bright.nl/",
+     "region": "nl", "weight": 0.85, "colour": "#00a1e4",
+     "default_category": "tech"},
 ]
 
 FEEDS: list[dict] = [
@@ -106,6 +131,12 @@ FEEDS: list[dict] = [
     {"publisher_id": "ad", "name": "AD Tech", "url": "https://www.ad.nl/tech/rss.xml", "category_hint": "tech"},
     {"publisher_id": "ad", "name": "AD Sport", "url": "https://www.ad.nl/sport/rss.xml", "category_hint": "sport"},
     {"publisher_id": "ad", "name": "AD Show", "url": "https://www.ad.nl/show/rss.xml", "category_hint": "entertainment"},
+    # Tweakers. Official open feed; 'nieuws.xml' is news only, 'mixed.xml' also
+    # carries reviews and background pieces.
+    {"publisher_id": "tweakers", "name": "Tweakers Nieuws", "url": "https://tweakers.net/feeds/nieuws.xml", "category_hint": None},
+    # Bright (DPG). Official open feed - note this one is NOT behind the
+    # consent gate that fronts the rest of the site.
+    {"publisher_id": "bright", "name": "Bright", "url": "https://www.bright.nl/rss", "category_hint": None},
 ]
 
 
@@ -115,11 +146,14 @@ def seed() -> None:
     with tx() as c:
         for p in PUBLISHERS:
             c.execute(
-                "INSERT INTO publishers(id,name,homepage,region,weight,colour,enabled,user_added,created_at) "
-                "VALUES(?,?,?,?,?,?,1,0,?) ON CONFLICT(id) DO UPDATE SET "
+                "INSERT INTO publishers(id,name,homepage,region,weight,colour,"
+                "default_category,enabled,user_added,created_at) "
+                "VALUES(?,?,?,?,?,?,?,1,0,?) ON CONFLICT(id) DO UPDATE SET "
                 "name=excluded.name, homepage=excluded.homepage, region=excluded.region, "
-                "weight=excluded.weight, colour=excluded.colour",
-                (p["id"], p["name"], p["homepage"], p["region"], p["weight"], p["colour"], ts),
+                "weight=excluded.weight, colour=excluded.colour, "
+                "default_category=excluded.default_category",
+                (p["id"], p["name"], p["homepage"], p["region"], p["weight"], p["colour"],
+                 p.get("default_category"), ts),
             )
         for f in FEEDS:
             exists = c.execute("SELECT id FROM sources WHERE url=?", (f["url"],)).fetchone()
