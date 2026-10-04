@@ -1,4 +1,4 @@
-"""Show which stories carry the 'Wordt bijgewerkt' badge and why."""
+"""Show which stories carry the 'Ontwikkelt zich' badge and why."""
 import sys
 sys.path.insert(0, '.')
 

@@ -64,7 +64,7 @@ hertekent alleen wanneer er daadwerkelijk iets veranderd is.
 **Herziene artikelen.** Veel uitgevers hergebruiken de oorspronkelijke `pubDate`
 ook als de tekst wijzigt. Bij een gewijzigde content-hash gebruikt `upsert()`
 daarom het detectiemoment als `updated_at`, anders zou een echte herziening nooit
-in *Laatste nieuws* belanden of het verhaal als "wordt bijgewerkt" markeren.
+in *Laatste nieuws* belanden of het verhaal als "ontwikkelt zich" markeren.
 
 ### Een uitgever toevoegen
 

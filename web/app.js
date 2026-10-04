@@ -33,6 +33,15 @@ const main = $('#main');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/* The developing-story badge. Defined once so the card, the story page and the
+   explanatory note can never drift apart. */
+const DEVELOPING = {
+  label: 'Ontwikkelt zich',
+  tooltip: 'Dit verhaal ontwikkelt zich nog: een uitgever heeft een artikel '
+    + 'herzien of er kwam recent nieuwe berichtgeving bij.',
+  short: 'Ontwikkelt zich nog',
+};
+
 function ago(iso) {
   if (!iso) return 'onbekend';
   const d = new Date(iso);
@@ -76,7 +85,7 @@ function storyCard(s, variant = '') {
     multi ? `<span class="chip multi">${s.publisher_count} uitgevers</span>`
           : `<span class="chip">1 artikel</span>`,
     s.is_updating
-      ? `<span class="chip live" title="Dit verhaal is nog in beweging: een uitgever heeft een artikel herzien of er kwam recent nieuwe berichtgeving bij.">Wordt bijgewerkt</span>`
+      ? `<span class="chip live" title="${esc(DEVELOPING.tooltip)}">${esc(DEVELOPING.label)}</span>`
       : '',
     s.category_label ? `<span class="chip cat">${esc(s.category_label)}</span>` : '',
     s.discovery ? `<span class="chip disc">Ontdekking</span>` : '',
@@ -291,7 +300,7 @@ async function viewStory(id) {
         <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px">
           <span class="chip cat">${esc(s.category_label || '')}</span>
           <span class="chip multi">${s.publisher_count} ${s.publisher_count === 1 ? 'uitgever' : 'uitgevers'} · ${s.article_count} artikelen</span>
-          ${s.is_updating ? '<span class="chip live" title="Nog in beweging">Wordt bijgewerkt</span>' : ''}
+          ${s.is_updating ? `<span class="chip live" title="${esc(DEVELOPING.tooltip)}">${esc(DEVELOPING.label)}</span>` : ''}
           ${s.geo_scope === 'fryslan' ? '<span class="chip">Fryslân</span>' : ''}
         </div>
         <h1>${esc(s.headline)}</h1>
@@ -300,7 +309,7 @@ async function viewStory(id) {
           <span class="pubs">${pubBadges(s.publishers)}</span>
         </div>
         ${s.is_updating ? `<div class="notice" style="border-left-color:var(--accent)">
-            <strong>Dit verhaal wordt nog bijgewerkt.</strong> Een uitgever heeft een artikel
+            <strong>Dit verhaal ${esc(DEVELOPING.short)}.</strong> Een uitgever heeft een artikel
             herzien of er kwam recent nieuwe berichtgeving bij. Controleer de bronlinks
             hieronder voor de actuele stand.</div>` : ''}
         ${s.headline_source_name

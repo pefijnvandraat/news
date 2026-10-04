@@ -29,6 +29,13 @@ module.exports = {
       autorestart: true,
       max_restarts: 10,
       min_uptime: 10000,
+      // Windows releases a listening socket lazily. Without a pause and a
+      // generous kill timeout a restart races its own predecessor, the new
+      // process cannot bind, and pm2 ends up in a restart loop while the old
+      // instance is still happily serving.
+      restart_delay: 3000,
+      kill_timeout: 8000,
+      treekill: true,
       out_file: path.join(__dirname, "data", "pm2-out.log"),
       error_file: path.join(__dirname, "data", "pm2-error.log"),
       merge_logs: true,

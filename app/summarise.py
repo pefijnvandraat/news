@@ -13,7 +13,7 @@ from collections import Counter
 from .topics import tokenize
 from .util import age_hours, iso, parse_dt, strip_html, truncate
 
-# "Wordt bijgewerkt" must mean the story is moving *now*. Two separate traps:
+# The "Ontwikkelt zich" badge must mean the story is moving *now*. Two traps:
 #   * no recency gate -> a story keeps the badge days after it settled;
 #   * too short a span -> a story that merely broke an hour ago and was picked
 #     up by four outlets at once looks "developing", which is just normal
