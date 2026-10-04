@@ -5,21 +5,46 @@ ingestion, clustering, ranking and personalisation.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from typing import Any, Iterable
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-DB_PATH = os.environ.get("NIEUWS_DB", os.path.join(DATA_DIR, "nieuws.db"))
+_DEFAULT_DATA = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+# NIEUWS_DATA moves the whole data directory (database, WAL, log); NIEUWS_DB
+# overrides just the database file. Hosted platforms need the first, because
+# the deployment directory is wiped on every deploy.
+DATA_DIR = os.environ.get("NIEUWS_DATA") or _DEFAULT_DATA
+DB_PATH = os.environ.get("NIEUWS_DB") or os.path.join(DATA_DIR, "nieuws.db")
 
 _local = threading.local()
+_shared: "sqlite3.Connection | None" = None
+# Reentrant: a transaction may call query() while already holding the lock.
+_lock = threading.RLock()
 
-SCHEMA = """
-PRAGMA journal_mode=WAL;
+# WAL needs shared-memory mapping, which SMB network shares do not provide.
+# Azure App Service mounts /home over SMB, so WAL there corrupts the file with
+# "database disk image is malformed". A rollback journal works fine on SMB; it
+# is slower, but this workload is one writer and a modest write volume.
+JOURNAL_MODE = (os.environ.get("NIEUWS_JOURNAL")
+                or ("DELETE" if os.environ.get("WEBSITE_SITE_NAME") else "WAL")).upper()
+
+# On SMB, several open handles to one database file produce "disk I/O error"
+# under concurrent access: the share emulates POSIX advisory locks too loosely
+# for SQLite. One connection behind one lock means one handle and no
+# contention. Locally that is unnecessary, and thread-local connections are
+# faster, so this only switches on where it has to.
+SERIALISE = (os.environ.get("NIEUWS_SERIALISE", "").lower() in ("1", "true", "yes")
+             or JOURNAL_MODE != "WAL")
+
+SCHEMA = f"""
+PRAGMA journal_mode={JOURNAL_MODE};
 PRAGMA foreign_keys=ON;
-
+""" + """
 CREATE TABLE IF NOT EXISTS publishers (
     id               TEXT PRIMARY KEY,
     name             TEXT NOT NULL,
@@ -167,33 +192,103 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+def _new_conn() -> sqlite3.Connection:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    # Set per connection as well as in the schema: a database created by an
+    # earlier run carries its own journal mode in the file header, and on a
+    # network share the wrong one corrupts it.
+    conn.execute(f"PRAGMA journal_mode={JOURNAL_MODE}")
+    return conn
+
+
 def connect() -> sqlite3.Connection:
+    """The connection for the caller.
+
+    On a local disk each thread gets its own, which is the fastest arrangement
+    and what SQLite expects. On a network share every thread shares one, and
+    `lock()` keeps them from overlapping - see SERIALISE above.
+    """
+    if SERIALISE:
+        global _shared
+        if _shared is None:
+            with _lock:
+                if _shared is None:
+                    _shared = _new_conn()
+        return _shared
     conn = getattr(_local, "conn", None)
     if conn is None:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
+        conn = _new_conn()
         _local.conn = conn
     return conn
 
 
 @contextmanager
+def lock():
+    """Held around every database operation when serialising, a no-op otherwise."""
+    if SERIALISE:
+        with _lock:
+            yield
+    else:
+        yield
+
+
+@contextmanager
 def tx():
-    conn = connect()
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+    with lock():
+        conn = connect()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def init_db() -> None:
-    conn = connect()
-    conn.executescript(SCHEMA)
-    _migrate(conn)
-    conn.commit()
+    _quarantine_if_corrupt()
+    with lock():
+        conn = connect()
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        conn.commit()
+
+
+def _quarantine_if_corrupt() -> None:
+    """Move an unreadable database aside so the app can still start.
+
+    A corrupt file otherwise fails every single request forever. The file is
+    renamed rather than deleted: it may still be recoverable, and silently
+    destroying someone's favourites and reading history is not ours to do.
+    Content rebuilds from the feeds within a refresh cycle.
+    """
+    if not os.path.exists(DB_PATH):
+        return
+    try:
+        probe = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            probe.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+        finally:
+            probe.close()
+        return
+    except sqlite3.DatabaseError as exc:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        spoiled = f"{DB_PATH}.corrupt-{stamp}"
+        logging.getLogger("nieuws.db").error(
+            "database unreadable (%s); moving it to %s and starting a fresh one",
+            exc, spoiled)
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            src = DB_PATH + suffix
+            if os.path.exists(src):
+                try:
+                    os.replace(src, spoiled + suffix)
+                except OSError:
+                    try:
+                        os.remove(src)
+                    except OSError:
+                        pass
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -208,11 +303,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def query(sql: str, params: Iterable[Any] = ()) -> list[sqlite3.Row]:
-    return connect().execute(sql, tuple(params)).fetchall()
+    with lock():
+        return connect().execute(sql, tuple(params)).fetchall()
 
 
 def one(sql: str, params: Iterable[Any] = ()) -> sqlite3.Row | None:
-    return connect().execute(sql, tuple(params)).fetchone()
+    with lock():
+        return connect().execute(sql, tuple(params)).fetchone()
 
 
 def get_meta(key: str, default: str | None = None) -> str | None:

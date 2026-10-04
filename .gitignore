@@ -12,6 +12,12 @@ __pycache__/
 venv/
 .env
 
+# Deployment artefacts
+deploy.zip
+wlogs*/
+wl[0-9]*/
+*.zip
+
 # Editors / OS
 .vscode/
 .idea/

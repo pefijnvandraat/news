@@ -554,6 +554,94 @@ geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 
 ---
 
+## Draaien in Azure
+
+De app draait op **https://nieuws-pf.azurewebsites.net** — App Service Linux,
+Python 3.12, in resource group `rg-newsfeed` (West-Europa).
+
+```powershell
+py -3.12 tools_package.py        # bouwt deploy.zip (allow-list, geen data/)
+az webapp deployment source config-zip -n nieuws-pf -g rg-newsfeed --src deploy.zip
+az webapp restart -n nieuws-pf -g rg-newsfeed
+```
+
+De herstart is geen bijgeloof: Oryx bouwt tijdens de deploy, maar de container
+is dan al gestart. Zonder herstart draait hij door op de vorige build.
+
+### Isolatie van andere diensten
+
+In dezelfde subscription draaien vier andere webapps, en één daarvan deelt al
+een App Service Plan met een app uit een andere resource group. Daarom:
+
+* **Een eigen plan** (`asp-nieuws-pf`, B1), geen bestaand plan hergebruikt.
+* **Alles binnen `rg-newsfeed`** — geen enkele resource daarbuiten aangeraakt.
+* **Eigen tags** (`app=nieuws`, `managed-by=scout`) zodat herkomst zichtbaar is.
+
+Na afloop geverifieerd: alle vier bestaande apps geven nog HTTP 200.
+
+### Twee dingen die SQLite op App Service slopen
+
+Beide zijn echt gebeurd tijdens deze deploy, niet theoretisch.
+
+**1. WAL werkt niet op Azure Files.** `/home` is een SMB-share, en die biedt
+geen gedeelde geheugenmapping. WAL corrumpeerde de database binnen minuten met
+`database disk image is malformed`. Een rollback-journal werkt wel op SMB:
+
+```
+NIEUWS_JOURNAL=DELETE
+```
+
+Lokaal blijft het WAL — `db.py` kiest automatisch op basis van
+`WEBSITE_SITE_NAME`, de env-var is alleen expliciete bevestiging.
+
+**2. Gelijktijdige verbindingen geven `disk I/O error`.** Elke request-thread
+had zijn eigen verbinding, dus zijn eigen filehandle op de share. SMB emuleert
+POSIX advisory locks te los voor SQLite; sequentiële requests gingen goed,
+maar zodra de browser vier endpoints tegelijk aanriep, viel alles om met HTTP
+500. De oplossing is één gedeelde verbinding achter één `RLock`
+(`db.SERIALISE`): één handle, geen vergrendelingsconflict. Lokaal blijft het
+thread-local, want daar is serialiseren alleen maar trager.
+
+Bewezen met `tools_test_concurrency.py` (12 lezers + 3 schrijvers) en met 40
+gelijktijdige HTTP-requests tegen de live app: 40/40 geslaagd.
+
+### Persistente opslag
+
+```
+NIEUWS_DATA=/home/data
+```
+
+`/home` is de enige map die een deploy en een herstart overleeft; de
+deploymentmap wordt elke keer overschreven. Geverifieerd: na
+`az webapp restart` stonden artikelen, favorieten, snelfilters en koersen er
+nog.
+
+### Als de database toch onleesbaar raakt
+
+`init_db()` hernoemt hem dan naar `nieuws.db.corrupt-<timestamp>` en begint
+opnieuw. **Hernoemen, niet verwijderen** — het bestand is mogelijk nog te
+redden, en iemands favorieten en leesgeschiedenis stilletjes weggooien is niet
+aan ons. De nieuwsinhoud bouwt zichzelf binnen één ronde weer op.
+
+### Overige instellingen
+
+| Instelling | Waarde | Waarom |
+|---|---|---|
+| Startup | `gunicorn -c gunicorn.conf.py app.api:app` | config in de repo, niet in de portal |
+| Workers | 1 | één SQLite-bestand en één planner-thread; een tweede worker zou dubbel ophalen en dubbel schrijven |
+| Timeout | 300s | een volledige ronde langs alle feeds duurt langer dan de standaard 30s |
+| Always On | aan | anders valt de achtergrondverversing stil zodra niemand kijkt |
+| HTTPS Only | aan | |
+| `WEBSITES_CONTAINER_START_TIME_LIMIT` | 600 | de eerste start pakt de Oryx-build uit |
+
+`tools_package.py` bouwt het pakket met een **allow-list**, geen
+exclude-list: `data/` bevat leesgeschiedenis en voorkeuren, en één vergeten
+uitzonderingspatroon zou die naar een publieke URL sturen. Een vergissing
+faalt nu dicht in plaats van open, en het script controleert de inhoud
+nog eens voor het klaar is.
+
+---
+
 ## Draaien
 
 ```powershell

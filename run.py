@@ -18,7 +18,10 @@ from logging.handlers import RotatingFileHandler
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-LOG_DIR = os.path.join(HERE, "data")
+# Hosted platforms mount persistent storage outside the deployment directory,
+# and often make the code directory read-only. NIEUWS_DATA keeps the database
+# and the log together wherever that happens to be.
+LOG_DIR = os.environ.get("NIEUWS_DATA") or os.path.join(HERE, "data")
 LOG_FILE = os.path.join(LOG_DIR, "nieuws.log")
 
 
@@ -80,15 +83,21 @@ if __name__ == "__main__":
     _configure_logging()
     log = logging.getLogger("nieuws")
     windowless = os.path.basename(sys.executable).lower().startswith("pythonw")
-    port = int(os.environ.get("NIEUWS_PORT", "8500"))
 
-    # A previous instance may still be releasing the port. Wait it out, and
-    # report plainly rather than failing with a bare WinError 10048 buried in
-    # a restart loop.
-    if not _wait_for_port(port, log):
+    # A hosted platform tells us where to listen: App Service and most PaaS
+    # set PORT and expect 0.0.0.0. Locally we stay on the loopback, because a
+    # personal news reader has no business being reachable from the network.
+    hosted = bool(os.environ.get("WEBSITE_SITE_NAME") or os.environ.get("PORT"))
+    port = int(os.environ.get("NIEUWS_PORT") or os.environ.get("PORT") or "8500")
+    host = os.environ.get("NIEUWS_HOST") or ("0.0.0.0" if hosted else "127.0.0.1")
+
+    # The port dance below only makes sense for a local restart; a hosted
+    # platform hands us a fresh container with the port already free.
+    if not hosted and not _wait_for_port(port, log):
         log.error("port %s is still in use. Another instance or an unrelated "
                   "service is holding it; stop that, or set NIEUWS_PORT.", port)
         sys.exit(1)
 
-    log.info("starting on 127.0.0.1:%s (windowless=%s)", port, windowless)
-    uvicorn.run("app.api:app", host="127.0.0.1", port=port, log_level="info")
+    log.info("starting on %s:%s (windowless=%s, hosted=%s)",
+             host, port, windowless, hosted)
+    uvicorn.run("app.api:app", host=host, port=port, log_level="info")
