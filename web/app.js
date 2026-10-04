@@ -42,6 +42,18 @@ const main = $('#main');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/* FastAPI reports errors as {"detail": ...}; the raw JSON is useless in an
+   alert, so pull out the human sentence when there is one. */
+function apiMessage(err) {
+  const raw = String(err?.message ?? err ?? '');
+  try {
+    const d = JSON.parse(raw).detail;
+    if (typeof d === 'string') return d;
+    if (d && typeof d.message === 'string') return d.message;
+  } catch { /* not JSON: the raw text is the best we have */ }
+  return raw;
+}
+
 /* The developing-story badge. Defined once so the card, the story page and the
    explanatory note can never drift apart. */
 const DEVELOPING = {
@@ -884,6 +896,187 @@ async function viewPrivacy() {
   } catch (e) { main.innerHTML = errorState(e.message); }
 }
 
+/* ---------------------------------------------------------------- ticker */
+/* The strip under the address bar. Two jobs: surface the current top
+   headlines without a click, and show the quotes the reader picked.
+
+   Built as a transform animation over a duplicated track rather than CSS
+   `marquee` or a scroll timer, because that keeps it on the compositor and
+   lets a single `animation-play-state` pause it on hover. */
+const ticker = {
+  paused: false, stories: [], stocks: [], timer: null,
+  hoverPause: false,
+};
+
+function tickerStockChip(q) {
+  if (!q.ok) {
+    return `<span class="tk-stock tk-stock-bad" title="Koers tijdelijk niet beschikbaar">`
+      + `<b>${esc(q.label || q.symbol)}</b> <span class="tk-na">n.b.</span></span>`;
+  }
+  const pct = q.change_pct;
+  const dir = pct == null ? 'flat' : pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '▬';
+  // Dutch notation: comma as decimal separator.
+  const price = q.price == null ? '—'
+    : q.price.toLocaleString('nl-NL', { maximumFractionDigits: q.price < 10 ? 4 : 2 });
+  const pctTxt = pct == null ? '' : `${pct > 0 ? '+' : ''}${pct.toLocaleString('nl-NL', {
+    minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+  const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : esc(q.currency || '');
+  return `<span class="tk-stock tk-${dir}" title="${esc(q.name || q.symbol)}${
+    q.exchange ? ' · ' + esc(q.exchange) : ''}">`
+    + `<b>${esc(q.label || q.symbol)}</b> <span class="tk-price">${cur}${price}</span> `
+    + `<span class="tk-delta">${arrow} ${pctTxt}</span></span>`;
+}
+
+function tickerSegment() {
+  return ticker.stories.map((s) =>
+    `<a class="tk-story" href="#/story/${encodeURIComponent(s.id)}"`
+    + ` data-ticker-story="${esc(s.id)}">`
+    + (s.publisher_count > 2 ? `<span class="tk-count">${s.publisher_count}×</span>` : '')
+    + `<span>${esc(s.headline)}</span></a>`
+  ).join('<span class="tk-sep" aria-hidden="true">•</span>');
+}
+
+function paintTicker() {
+  const bar = $('#ticker');
+  const track = $('#ticker-track');
+  const strip = $('#ticker-stocks-strip');
+  if (!bar || !track) return;
+  if (!ticker.stories.length && !ticker.stocks.length) { bar.hidden = true; return; }
+  bar.hidden = false;
+
+  // Quotes are pinned, not scrolled. A price you have to wait a full lap to
+  // see is useless - the reason to pick a stock is to glance at it.
+  if (strip) {
+    strip.innerHTML = ticker.stocks.map(tickerStockChip).join('');
+    strip.hidden = !ticker.stocks.length;
+    // The scrollbar is hidden for looks, so without this the extra chips are
+    // simply invisible. A fade on the edge is the only cue that there is more.
+    requestAnimationFrame(() => {
+      strip.classList.toggle('is-scrollable', strip.scrollWidth > strip.clientWidth + 2);
+    });
+  }
+
+  const segment = tickerSegment();
+  // The track holds the same content twice; the animation shifts it by exactly
+  // half its width, so the hand-off is invisible and the loop never "jumps".
+  track.innerHTML = `<div class="tk-seg">${segment}</div>`
+    + `<div class="tk-seg" aria-hidden="true">${segment}</div>`;
+
+  // Duration from content width keeps the reading speed constant whether there
+  // are three headlines or thirty. ~95px/s is brisk enough not to feel stuck
+  // but still comfortably readable.
+  requestAnimationFrame(() => {
+    const w = track.firstElementChild?.getBoundingClientRect().width || 0;
+    track.style.setProperty('--tk-duration', `${Math.max(18, Math.round(w / 95))}s`);
+  });
+  applyTickerPause();
+}
+
+function applyTickerPause() {
+  const track = $('#ticker-track');
+  const btn = $('#ticker-pause');
+  if (!track) return;
+  const stop = ticker.paused || ticker.hoverPause;
+  track.style.animationPlayState = stop ? 'paused' : 'running';
+  if (btn) {
+    btn.textContent = ticker.paused ? '▶' : '⏸';
+    btn.setAttribute('aria-pressed', String(ticker.paused));
+    btn.title = ticker.paused ? 'Ticker hervatten' : 'Ticker pauzeren';
+    btn.setAttribute('aria-label', btn.title);
+  }
+}
+
+async function loadTicker() {
+  try {
+    const d = await API.get('/api/ticker');
+    ticker.stories = d.stories || [];
+    ticker.stocks = d.stocks || [];
+    paintTicker();
+  } catch { /* a ticker is decoration: never let it surface an error banner */ }
+}
+
+/* ------------------------------------------------------- stock picker */
+function stockRow(q) {
+  const pct = q.change_pct;
+  const sign = pct == null ? '' : pct > 0 ? '+' : '';
+  const dir = pct == null ? 'flat' : pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  return `<li class="stk">
+    <div class="stk-body">
+      <strong>${esc(q.name || q.label || q.symbol)}</strong>
+      <span class="stk-sym">${esc(q.symbol)}${q.exchange ? ' · ' + esc(q.exchange) : ''}</span>
+    </div>
+    ${q.ok ? `<span class="stk-quote tk-${dir}">${
+      q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : esc(q.currency || '')}${
+      q.price.toLocaleString('nl-NL', { maximumFractionDigits: q.price < 10 ? 4 : 2 })}
+      <small>${pct == null ? '' : sign + pct.toLocaleString('nl-NL', {
+        minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%'}</small></span>`
+      : '<span class="stk-quote tk-flat">niet beschikbaar</span>'}
+    <button class="btn ghost small" data-stock-del="${esc(q.symbol)}">Verwijderen</button>
+  </li>`;
+}
+
+/* Keeps the "In de ticker 2/12" counter honest while rows are added or
+   removed in place. */
+function bumpStockCount(delta) {
+  const el = $('#stk-count');
+  if (!el) return;
+  const [n, max] = el.textContent.split('/').map((v) => parseInt(v, 10));
+  if (Number.isNaN(n)) return;
+  el.textContent = `${Math.max(0, n + delta)}/${max}`;
+}
+
+async function openStockPicker() {
+  openSheet('Koersen in de ticker', '<p class="muted">Laden…</p>');
+  let d;
+  try { d = await API.get('/api/stocks'); }
+  catch (e) { $('#sheet-body').innerHTML = `<p class="err">Laden mislukt: ${esc(e.message)}</p>`; return; }
+
+  const list = d.quotes.length
+    ? `<ul class="stk-list" id="stk-watchlist">${d.quotes.map(stockRow).join('')}</ul>`
+    : `<ul class="stk-list" id="stk-watchlist"></ul>
+       <p class="muted">Nog geen fondsen gekozen. Zoek hierboven op bedrijfsnaam
+       (bijv. <em>Heineken</em>) of op ticker (<em>ASML.AS</em>).</p>`;
+
+  $('#sheet-body').innerHTML = `
+    <form id="stocksearch" class="stk-search" autocomplete="off">
+      <input id="stockq" type="search" placeholder="Bedrijfsnaam of ticker, bijv. Heineken"
+             aria-label="Zoek een fonds" />
+      <button class="btn" type="submit">Zoeken</button>
+    </form>
+    <div id="stockresults"></div>
+    <h3 class="stk-head">In de ticker
+      <span class="muted" id="stk-count">${d.quotes.length}/${d.max}</span></h3>
+    ${list}
+    <p class="muted small">Koersen komen van Yahoo Finance en lopen maximaal een
+    minuut achter. Geen advies — alleen ter informatie.</p>`;
+  $('#stockq')?.focus();
+}
+
+async function runStockSearch(term) {
+  const box = $('#stockresults');
+  if (!box) return;
+  box.innerHTML = '<p class="muted">Zoeken…</p>';
+  let r;
+  try { r = await API.get(`/api/stocks/search?q=${encodeURIComponent(term)}`); }
+  catch (e) { box.innerHTML = `<p class="err">Zoeken mislukt: ${esc(e.message)}</p>`; return; }
+
+  if (!r.results.length) {
+    box.innerHTML = `<p class="muted">Niets gevonden voor “${esc(term)}”. Probeer de
+      beursticker, bijvoorbeeld <em>HEIA.AS</em>.</p>`;
+    return;
+  }
+  box.innerHTML = `<ul class="stk-list">${r.results.map((s) => `
+    <li class="stk">
+      <div class="stk-body">
+        <strong>${esc(s.name)}</strong>
+        <span class="stk-sym">${esc(s.symbol)}${s.exchange ? ' · ' + esc(s.exchange) : ''}</span>
+      </div>
+      <button class="btn small" data-stock-add="${esc(s.symbol)}"
+              data-stock-name="${esc(s.name)}">Toevoegen</button>
+    </li>`).join('')}</ul>`;
+}
+
 /* ---------------------------------------------------------------- sheet */
 function openSheet(title, html) {
   $('#sheet-title').textContent = title;
@@ -1089,6 +1282,51 @@ document.addEventListener('click', async (ev) => {
   const srcDel = t.closest('[data-src-del]');
   if (srcDel) { await API.del(`/api/sources/${srcDel.dataset.srcDel}`); viewSources(); return; }
 
+  const stockAdd = t.closest('[data-stock-add]');
+  if (stockAdd) {
+    ev.preventDefault();
+    stockAdd.disabled = true;
+    const was = stockAdd.textContent;
+    stockAdd.textContent = 'Bezig…';
+    try {
+      const res = await API.post('/api/stocks', {
+        symbol: stockAdd.dataset.stockAdd, name: stockAdd.dataset.stockName,
+      });
+      stockAdd.textContent = res.already ? '✓ Staat er al' : '✓ Toegevoegd';
+      // Append straight to the list instead of re-rendering the sheet: a full
+      // refetch costs a couple of seconds, during which the reader sees no
+      // change and clicks again.
+      if (res.quote) {
+        $('#stk-watchlist')?.insertAdjacentHTML('beforeend', stockRow(
+          { ...res.quote, name: stockAdd.dataset.stockName }));
+        bumpStockCount(+1);
+        loadTicker();
+      }
+    } catch (e) {
+      stockAdd.disabled = false;
+      stockAdd.textContent = was;
+      alert('Toevoegen mislukt: ' + apiMessage(e));
+    }
+    return;
+  }
+
+  const stockDel = t.closest('[data-stock-del]');
+  if (stockDel) {
+    ev.preventDefault();
+    stockDel.disabled = true;
+    const row = stockDel.closest('.stk');
+    try {
+      await API.del(`/api/stocks/${encodeURIComponent(stockDel.dataset.stockDel)}`);
+      row?.remove();
+      bumpStockCount(-1);
+      loadTicker();
+    } catch (e) {
+      stockDel.disabled = false;
+      alert('Verwijderen mislukt: ' + apiMessage(e));
+    }
+    return;
+  }
+
   const addFeed = t.closest('[data-add-feed]');
   if (addFeed) {
     ev.preventDefault();
@@ -1205,6 +1443,12 @@ document.addEventListener('submit', async (ev) => {
     $('#favinput').value = '';
     viewFavorites();
   }
+  if (ev.target.id === 'stocksearch') {
+    ev.preventDefault();
+    runStockSearch($('#stockq').value.trim());
+    return;
+  }
+
   if (ev.target.id === 'probesrc') {
     ev.preventDefault();
     const input = document.querySelector('#probeurl');
@@ -1303,9 +1547,33 @@ window.addEventListener('hashchange', route);
   if (saved) document.documentElement.dataset.theme = saved;
   const savedView = localStorage.getItem('nieuws-view');
   if (savedView === 'list' || savedView === 'cards') state.view = savedView;
+  ticker.paused = localStorage.getItem('nieuws-ticker') === 'paused';
+  wireTicker();
   await loadMeta();
   route();
+  loadTicker();
   setInterval(loadMeta, 60000);
   const everyMs = Math.max(60, state.meta?.priority_refresh_seconds || 120) * 1000;
   setInterval(pollTopStories, everyMs);
+  // Quotes move faster than headlines, but the server caches for a minute, so
+  // polling more often than that would only burn requests.
+  setInterval(loadTicker, 60000);
 })();
+
+function wireTicker() {
+  const bar = $('#ticker');
+  if (!bar) return;
+  $('#ticker-pause')?.addEventListener('click', () => {
+    ticker.paused = !ticker.paused;
+    localStorage.setItem('nieuws-ticker', ticker.paused ? 'paused' : 'running');
+    applyTickerPause();
+  });
+  $('#ticker-stocks')?.addEventListener('click', openStockPicker);
+  // Hold still while the reader is aiming at a headline, otherwise the link
+  // slides out from under the cursor.
+  const vp = $('#ticker-viewport');
+  vp?.addEventListener('mouseenter', () => { ticker.hoverPause = true; applyTickerPause(); });
+  vp?.addEventListener('mouseleave', () => { ticker.hoverPause = false; applyTickerPause(); });
+  vp?.addEventListener('focusin', () => { ticker.hoverPause = true; applyTickerPause(); });
+  vp?.addEventListener('focusout', () => { ticker.hoverPause = false; applyTickerPause(); });
+}

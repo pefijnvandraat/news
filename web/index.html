@@ -36,6 +36,17 @@
       <button id="theme" class="icon-btn" title="Licht/donker" aria-label="Thema wisselen">◐</button>
     </div>
   </div>
+  <div class="ticker" id="ticker" hidden>
+    <span class="ticker-label" id="ticker-label">Laatste</span>
+    <div class="ticker-stocks" id="ticker-stocks-strip" aria-label="Gekozen koersen"></div>
+    <div class="ticker-viewport" id="ticker-viewport">
+      <div class="ticker-track" id="ticker-track"></div>
+    </div>
+    <button class="ticker-btn" id="ticker-pause" title="Ticker pauzeren"
+            aria-label="Ticker pauzeren" aria-pressed="false">⏸</button>
+    <button class="ticker-btn" id="ticker-stocks" title="Koersen in de ticker"
+            aria-label="Koersen kiezen">📈</button>
+  </div>
   <div class="status-strip" id="statusstrip" hidden></div>
 </header>
 

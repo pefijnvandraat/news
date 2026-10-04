@@ -223,6 +223,69 @@ zodat opgeslagen interacties blijven kloppen.
 
 ---
 
+## Nieuwsticker
+
+Direct onder de adresbalk loopt een strook met de huidige topkoppen. Klik op een
+kop en het verhaaldetail opent — dezelfde pagina als vanaf een kaart, dus de
+klik telt gewoon mee voor je personalisatie.
+
+Een paar keuzes die het verschil maken:
+
+* **De koppen zijn ingekort tot 80 tekens** op een woordgrens. De strook is één
+  regel hoog; zonder inkorten zou de browser midden in een woord afkappen.
+* **De doorloopsnelheid is constant**, niet de duur. De animatieduur wordt
+  berekend uit de breedte van de inhoud (~95 px/s), zodat drie koppen net zo
+  prettig leesbaar voorbijkomen als dertig.
+* **Hij staat stil zolang je er met de muis op staat** (of er met het
+  toetsenbord in focus bent), anders schuift de link onder je cursor weg. Met
+  de ⏸-knop zet je hem permanent stil; die keuze wordt onthouden.
+* **Bij `prefers-reduced-motion` beweegt er niets.** De strook wordt dan een
+  gewoon horizontaal scrollbaar gebied — alle koppen blijven bereikbaar.
+
+De ticker is decoratie: als `/api/ticker` faalt, verschijnt er geen foutbalk.
+
+### Koersen in de ticker
+
+Met de 📈-knop rechts in de strook kies je fondsen. Zoek op bedrijfsnaam
+(*Heineken*) of op ticker (*ASML.AS*) — je hoeft het symbool niet te kennen.
+Aandelen, ETF's, indices (`^AEX`) en crypto (`BTC-EUR`) werken allemaal.
+
+**Gekozen koersen scrollen niet mee maar staan vast** aan de linkerkant. Een
+prijs waarvoor je een hele ronde moet wachten is nutteloos — juist dat glansje
+is de reden om een fonds te kiezen. Passen ze niet allemaal, dan vervaagt de
+rechterrand om te laten zien dat er meer staat (de scrollbalk is verborgen, dus
+zonder die fade zou je het niet zien).
+
+Verdere keuzes:
+
+* **Koersen komen van het publieke Yahoo Finance chart-endpoint**, zonder
+  API-sleutel. Het batch-endpoint geeft zonder sessie-crumb een 401, dus elk
+  symbool wordt apart maar parallel opgehaald. Daarom is de lijst gemaximeerd op
+  **12 fondsen**.
+* **Antwoorden worden 60 seconden gecached**, ook de mislukte. De ticker pollt
+  op een timer en meerdere tabbladen tellen op; zonder cache zou elke poll een
+  ronde requests per symbool opleveren. Een dood symbool zou anders elke poll
+  opnieuw in timeouts lopen.
+* **Een symbool wordt geverifieerd vóór opslag**, net als bij de bronnen. Een
+  typefout kan zo geen permanent falend fonds in de ticker parkeren.
+* **Een mislukte koers laat de regel staan** met "n.b." in plaats van hem te
+  laten verdwijnen; anders zou je denken dat je keuze niet is opgeslagen.
+* **Labels worden ingekort**: "Microsoft Corporation" past niet op één regel,
+  en "MSFT" zegt niets als je op bedrijfsnaam zocht. De juridische achtervoegsels
+  gaan eraf. Levert dat twee keer hetzelfde label op — *Heineken N.V.* en
+  *Heineken Holding N.V.* zijn verschillende fondsen — dan vallen beide terug op
+  hun symbool.
+* **Stijging en daling zijn niet alleen kleur**: er staat altijd een ▲/▼ en een
+  teken bij, zodat het ook zonder kleurwaarneming leesbaar is.
+
+Toevoegen en verwijderen werken direct in de lijst, zonder de hele kiezer
+opnieuw op te halen. Dat scheelde ~3 seconden waarin er niets leek te gebeuren
+en je geneigd was nog een keer te klikken.
+
+> Koersen zijn ter informatie, geen advies, en lopen tot een minuut achter.
+
+---
+
 ## Weergave: kaarten of lijst
 
 Elke nieuwspagina (Voorpagina, Mijn nieuws, zoeken, onderwerp, categorie,
@@ -421,6 +484,9 @@ geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 | `GET /api/privacy`, `POST /api/privacy/{reset,forget,unhide}` | Inzage, wissen en verborgen verhalen terugzetten |
 | `GET POST PATCH DELETE /api/sources` | Eigen bronnen beheren |
 | `POST /api/sources/probe` | Een URL controleren: feed, consent-gate, gewone pagina of fout — met geverifieerde feed-kandidaten |
+| `GET /api/ticker` | Topkoppen (ingekort) plus de gekozen koersen, in één ronde |
+| `GET POST DELETE /api/stocks` | Fondsen in de ticker beheren |
+| `GET /api/stocks/search?q=` | Bedrijfsnaam of ticker opzoeken |
 
 ---
 

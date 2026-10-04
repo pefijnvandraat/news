@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 import os
 
-from . import config, personalise
+from . import config, personalise, stocks
 from .cluster import recluster
 from .db import init_db, one, query, tx
 from .ingest.discover import discover
@@ -20,7 +20,7 @@ from .ingest.pipeline import priority_source_ids, run_ingest
 from .ranking import (compute_front_page_scores, load_story_topics,
                       parse_json_list, story_publishers)
 from .topics import CURATED_TOPICS, topic_label
-from .util import iso, new_id, now, slugify
+from .util import iso, new_id, now, slugify, truncate
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
@@ -639,6 +639,54 @@ def toggle_source(source_id: str, payload: dict = Body(...)):
     with tx() as c:
         c.execute("UPDATE sources SET enabled=? WHERE id=?",
                   (1 if payload.get("enabled", True) else 0, source_id))
+    return {"ok": True}
+
+
+@app.get("/api/ticker")
+def ticker(limit: int = Query(10, ge=3, le=30)):
+    """Headlines and quotes for the strip under the address bar.
+
+    One endpoint rather than two: the ticker polls on a timer, and a single
+    round trip keeps headlines and prices in step with each other.
+    """
+    hidden = personalise.hidden_story_ids()
+    rows = [r for r in _story_rows(order="frontpage_score DESC", limit=limit * 3)
+            if r["id"] not in hidden][:limit]
+    items = [{
+        "id": r["id"],
+        # The strip is one line high, so a long headline would be clipped
+        # mid-word by the browser. Cut it on a word boundary instead.
+        "headline": truncate(r["headline"] or "", 80),
+        "category": r["category"],
+        "publisher_count": r["publisher_count"],
+        "updated_at": r["last_updated_at"],
+    } for r in rows]
+    return {"generated_at": iso(now()), "stories": items,
+            "stocks": stocks.ticker_quotes()}
+
+
+@app.get("/api/stocks")
+def list_stocks(refresh: bool = False):
+    return {"watchlist": stocks.watchlist(), "quotes": stocks.ticker_quotes(refresh),
+            "max": stocks.MAX_WATCHLIST}
+
+
+@app.get("/api/stocks/search")
+def search_stocks(q: str = Query("", min_length=0)):
+    return {"results": stocks.search(q)}
+
+
+@app.post("/api/stocks")
+def add_stock(payload: dict = Body(...)):
+    try:
+        return stocks.add(payload.get("symbol") or "", payload.get("name"))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.delete("/api/stocks/{symbol}")
+def delete_stock(symbol: str):
+    stocks.remove(symbol)
     return {"ok": True}
 
 
