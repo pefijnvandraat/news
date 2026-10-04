@@ -159,6 +159,7 @@ def _decorate(stories: list[dict], with_articles: bool = False) -> list[dict]:
     pub_meta = {r["id"]: dict(r) for r in query("SELECT * FROM publishers")}
     saved = personalise.saved_story_ids()
     hidden = personalise.hidden_story_ids()
+    feedback = personalise.explicit_feedback()
     arts: dict[str, list[dict]] = {}
     if with_articles and ids:
         marks = ",".join("?" * len(ids))
@@ -200,6 +201,7 @@ def _decorate(stories: list[dict], with_articles: bool = False) -> list[dict]:
                             "colour": pub_meta.get(p, {}).get("colour")} for p in pubs],
             "saved": s["id"] in saved,
             "hidden": s["id"] in hidden,
+            "feedback": (feedback.get(s["id"]) or (None,))[0],
             "score": s.get("score"),
             "reasons": s.get("reasons"),
             "discovery": s.get("discovery", False),

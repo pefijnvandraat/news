@@ -32,8 +32,16 @@ ACTION_WEIGHTS = {
     "more": 3.0,
     "unsave": -0.6,
     "hide": -2.0,
+    "unhide": 0.0,
     "less": -3.0,
+    "feedback_clear": 0.0,   # withdraws an earlier more/less on that story
 }
+
+# Explicit thumbs up/down is a *state* per story, not a tally of events: the
+# latest click wins and can be withdrawn. Summing the log instead would let a
+# "more" (+3) and a later "less" (-3) cancel out to neutral, which is the
+# opposite of what the second click asked for.
+FEEDBACK_ACTIONS = ("more", "less", "feedback_clear")
 HALF_LIFE_DAYS = 10.0
 SERENDIPITY_EVERY = 7     # 1 discovery slot per 7 personalised stories
 
@@ -108,17 +116,73 @@ def _decay(created_at: str) -> float:
     return math.pow(0.5, days / HALF_LIFE_DAYS)
 
 
-def learned_interests(user: str = USER) -> dict[str, float]:
-    """Decayed topic affinity inferred from behaviour, normalised to 0..1."""
+def explicit_feedback(user: str = USER) -> dict[str, tuple[str, str]]:
+    """Current thumbs up/down per story as (action, timestamp).
+
+    Replays the log in insert order and keeps only the last verdict, so
+    clicking "minder zo" after "meer zo" genuinely replaces it, and clicking
+    the same button again withdraws it.
+
+    Ordered by rowid, not by created_at: timestamps have second resolution and
+    ids are random, so two clicks within the same second would otherwise be
+    replayed in arbitrary order - exactly the case this feature creates when
+    you correct yourself straight away.
+    """
     rows = query(
-        """SELECT ui.action, ui.weight, ui.created_at, t.slug
+        "SELECT story_id, action, created_at FROM user_interactions "
+        "WHERE user_id=? AND story_id IS NOT NULL AND action IN (?,?,?) "
+        "ORDER BY rowid ASC",
+        (user, *FEEDBACK_ACTIONS))
+    state: dict[str, tuple[str, str]] = {}
+    for r in rows:
+        if r["action"] == "feedback_clear":
+            state.pop(r["story_id"], None)
+        else:
+            state[r["story_id"]] = (r["action"], r["created_at"])
+    return state
+
+
+def _topics_for_stories(story_ids) -> dict[str, list[str]]:
+    ids = list(story_ids)
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    rows = query(
+        f"""SELECT st.story_id, t.slug FROM story_topics st
+            JOIN topics t ON t.id = st.topic_id
+            WHERE st.story_id IN ({marks})""", tuple(ids))
+    out: dict[str, list[str]] = defaultdict(list)
+    for r in rows:
+        out[r["story_id"]].append(r["slug"])
+    return out
+
+
+def learned_interests(user: str = USER) -> dict[str, float]:
+    """Decayed topic affinity inferred from behaviour, normalised to -1..1.
+
+    Implicit signals come from the event log; explicit thumbs up/down is
+    applied once per story from its current state, so a withdrawn or replaced
+    verdict leaves no residue.
+    """
+    rows = query(
+        f"""SELECT ui.action, ui.weight, ui.created_at, t.slug
            FROM user_interactions ui
            JOIN story_topics st ON st.story_id = ui.story_id
            JOIN topics t ON t.id = st.topic_id
-           WHERE ui.user_id=? AND ui.story_id IS NOT NULL""", (user,))
+           WHERE ui.user_id=? AND ui.story_id IS NOT NULL
+             AND ui.action NOT IN ({','.join('?' * len(FEEDBACK_ACTIONS))})""",
+        (user, *FEEDBACK_ACTIONS))
     acc: dict[str, float] = defaultdict(float)
     for r in rows:
         acc[r["slug"]] += r["weight"] * _decay(r["created_at"])
+
+    feedback = explicit_feedback(user)
+    topics = _topics_for_stories(feedback)
+    for story_id, (action, ts) in feedback.items():
+        weight = ACTION_WEIGHTS[action] * _decay(ts)
+        for slug in topics.get(story_id, []):
+            acc[slug] += weight
+
     if not acc:
         return {}
     peak = max(abs(v) for v in acc.values()) or 1.0
@@ -137,13 +201,21 @@ def publisher_affinity(user: str = USER) -> dict[str, float]:
 
 
 def negative_signals(user: str = USER) -> dict[str, float]:
-    """Per-story suppression from explicit 'less like this' / hide actions."""
-    rows = query(
-        "SELECT story_id, action, created_at FROM user_interactions "
-        "WHERE user_id=? AND action IN ('hide','less') AND story_id IS NOT NULL", (user,))
+    """Per-story suppression from an active 'less like this' or a hide.
+
+    Only the *current* verdict counts, so withdrawing a thumbs-down lifts the
+    suppression instead of leaving it in the log forever.
+    """
     acc: dict[str, float] = defaultdict(float)
-    for r in rows:
-        acc[r["story_id"]] += (1.0 if r["action"] == "hide" else 0.7) * _decay(r["created_at"])
+    hidden = hidden_story_ids(user)
+    for r in query(
+        "SELECT story_id, created_at FROM user_interactions "
+        "WHERE user_id=? AND action='hide' AND story_id IS NOT NULL", (user,)):
+        if r["story_id"] in hidden:
+            acc[r["story_id"]] += 1.0 * _decay(r["created_at"])
+    for story_id, (action, ts) in explicit_feedback(user).items():
+        if action == "less":
+            acc[story_id] += 0.7 * _decay(ts)
     return acc
 
 

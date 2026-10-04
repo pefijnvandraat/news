@@ -395,6 +395,7 @@ button.why.linkish {
   background: var(--accent); color: #fff; font-weight: 650;
 }
 .btn.ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.btn.ghost.on, .btn.on { background: var(--accent); color: #fff; border-color: transparent; }
 .btn.danger { background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }
 
 table.src-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }

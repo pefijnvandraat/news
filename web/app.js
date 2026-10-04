@@ -135,10 +135,9 @@ function storyCard(s, variant = '') {
         <span class="pubs">${pubBadges(s.publishers)}</span>
       </div>
       <div class="card-actions">
-        <button class="mini ${s.saved ? 'on' : ''}" data-act="save" data-id="${esc(s.id)}">
-          ${s.saved ? '★ Bewaard' : '☆ Bewaar'}</button>
-        <button class="mini" data-act="more" data-id="${esc(s.id)}">👍 Meer zo</button>
-        <button class="mini" data-act="less" data-id="${esc(s.id)}">👎 Minder zo</button>
+        <button class="mini ${s.saved ? 'on' : ''}" data-act="save" data-id="${esc(s.id)}"
+          aria-pressed="${!!s.saved}">${s.saved ? '★ Bewaard' : '☆ Bewaar'}</button>
+        ${feedbackButtons(s)}
         <button class="mini" data-act="hide" data-id="${esc(s.id)}">✕ Verberg</button>
       </div>
     </div>
@@ -278,9 +277,13 @@ function storyTable(rows, ctx = {}) {
     return `<tr data-story="${esc(s.id)}">${cells}
       <td class="col-actions"><div class="rowacts">
         <button class="mini ${s.saved ? 'on' : ''}" data-act="save" data-id="${esc(s.id)}"
-          title="Bewaar">${s.saved ? '★' : '☆'}</button>
-        <button class="mini" data-act="more" data-id="${esc(s.id)}" title="Meer zo">👍</button>
-        <button class="mini" data-act="less" data-id="${esc(s.id)}" title="Minder zo">👎</button>
+          aria-pressed="${!!s.saved}" title="Bewaar">${s.saved ? '★' : '☆'}</button>
+        <button class="mini ${s.feedback === 'more' ? 'on' : ''}" data-act="more" data-id="${esc(s.id)}"
+          aria-pressed="${s.feedback === 'more'}"
+          title="${s.feedback === 'more' ? 'Meer zo — klik om ongedaan te maken' : 'Meer zo'}">👍</button>
+        <button class="mini ${s.feedback === 'less' ? 'on' : ''}" data-act="less" data-id="${esc(s.id)}"
+          aria-pressed="${s.feedback === 'less'}"
+          title="${s.feedback === 'less' ? 'Minder zo — klik om ongedaan te maken' : 'Minder zo'}">👎</button>
         <button class="mini" data-act="hide" data-id="${esc(s.id)}" title="Verberg">✕</button>
       </div></td></tr>`;
   }).join('');
@@ -338,6 +341,24 @@ function resetListState(routeKey) {
   state.listRoute = routeKey;
   state.listSort = { key: '', dir: 'desc' };
   state.listFilters = {};
+}
+
+/* Thumbs up/down are a single three-way state per story: up, down, or
+   neither. Rendered from the server's verdict so a reload shows what you
+   actually chose, and defined once so the card, the table row and the
+   "why" panel cannot disagree. */
+function feedbackButtons(s, size = 'mini') {
+  const up = s.feedback === 'more';
+  const down = s.feedback === 'less';
+  const cls = size === 'mini' ? 'mini' : 'btn ghost';
+  const label = (full, icon) => (size === 'mini' ? full : icon);
+  return `
+    <button class="${cls} ${up ? 'on' : ''}" data-act="more" data-id="${esc(s.id)}"
+      aria-pressed="${up}" title="${up ? 'Klik om dit ongedaan te maken' : 'Meer verhalen zoals dit'}"
+      >${label('👍 Meer zo', '👍 Meer zoals dit')}</button>
+    <button class="${cls} ${down ? 'on' : ''}" data-act="less" data-id="${esc(s.id)}"
+      aria-pressed="${down}" title="${down ? 'Klik om dit ongedaan te maken' : 'Minder verhalen zoals dit'}"
+      >${label('👎 Minder zo', '👎 Minder zoals dit')}</button>`;
 }
 
 function section(title, hint, stories, opts = {}) {
@@ -566,10 +587,9 @@ async function viewStory(id) {
         ${dis}
 
         <div class="card-actions" style="margin-bottom:8px">
-          <button class="mini ${s.saved ? 'on' : ''}" data-act="save" data-id="${esc(s.id)}">
-            ${s.saved ? '★ Bewaard' : '☆ Bewaar'}</button>
-          <button class="mini" data-act="more" data-id="${esc(s.id)}">👍 Meer zo</button>
-          <button class="mini" data-act="less" data-id="${esc(s.id)}">👎 Minder zo</button>
+          <button class="mini ${s.saved ? 'on' : ''}" data-act="save" data-id="${esc(s.id)}"
+            aria-pressed="${!!s.saved}">${s.saved ? '★ Bewaard' : '☆ Bewaar'}</button>
+          ${feedbackButtons(s)}
         </div>
 
         ${(s.topics || []).length ? `<div class="sub">Onderwerpen & entiteiten</div>
@@ -697,16 +717,22 @@ function closeSheet() { $('#sheet').hidden = true; $('#backdrop').hidden = true;
 function showWhy(storyId) {
   const card = document.querySelector(`[data-story="${CSS.escape(storyId)}"]`);
   const data = whyCache.get(storyId) || [];
+  const title = card?.querySelector('h3, .col-title a')?.textContent?.trim() || '';
+  // Mirror whatever the on-page buttons currently show, so the panel never
+  // contradicts the card it was opened from.
+  const active = document.querySelector(
+    `[data-id="${CSS.escape(storyId)}"][data-act="more"].on`) ? 'more'
+    : document.querySelector(`[data-id="${CSS.escape(storyId)}"][data-act="less"].on`) ? 'less' : null;
   openSheet('Waarom zie ik dit?', `
-    <p style="color:var(--muted);margin-top:0">${card ? esc(card.querySelector('h3').textContent) : ''}</p>
+    <p style="color:var(--muted);margin-top:0">${esc(title)}</p>
     <ul style="padding-left:18px;line-height:1.8">
       ${data.map((r) => `<li>${esc(r.text)}</li>`).join('') || '<li>Actueel nieuws.</li>'}
     </ul>
     <div class="notice" style="margin-top:18px">Expliciete favorieten wegen altijd zwaarder dan
-      afgeleide interesses. Recent gedrag telt zwaarder dan oud gedrag.</div>
+      afgeleide interesses. Recent gedrag telt zwaarder dan oud gedrag.
+      Klik een actieve knop opnieuw om je keuze in te trekken.</div>
     <div style="display:flex;gap:9px;flex-wrap:wrap">
-      <button class="btn" data-act="more" data-id="${esc(storyId)}">👍 Meer zoals dit</button>
-      <button class="btn ghost" data-act="less" data-id="${esc(storyId)}">👎 Minder zoals dit</button>
+      ${feedbackButtons({ id: storyId, feedback: active }, 'btn')}
       <button class="btn ghost" data-act="hide" data-id="${esc(storyId)}">✕ Verberg dit verhaal</button>
       <a class="btn ghost" href="#/privacy">Beheer personalisatie</a>
     </div>`);
@@ -786,19 +812,41 @@ document.addEventListener('click', async (ev) => {
   if (act) {
     ev.preventDefault();
     const { act: a, id } = act.dataset;
+
     if (a === 'save') {
       const on = act.classList.toggle('on');
-      act.textContent = on ? '★ Bewaard' : '☆ Bewaar';
+      act.setAttribute('aria-pressed', String(on));
+      if (act.closest('.rowacts')) act.textContent = on ? '★' : '☆';
+      else act.textContent = on ? '★ Bewaard' : '☆ Bewaar';
       track(on ? 'save' : 'unsave', id);
-    } else {
-      track(a, id);
-      act.textContent = { more: '👍 Genoteerd', less: '👎 Genoteerd', hide: '✓ Verborgen' }[a] || '✓';
-      act.classList.add('on');
-      if (a === 'hide') {
-        const card = document.querySelector(`[data-story="${CSS.escape(id)}"]`);
-        if (card) { card.style.opacity = '.35'; setTimeout(() => card.remove(), 450); }
-        closeSheet();
-      }
+      return;
+    }
+
+    if (a === 'more' || a === 'less') {
+      // One three-way state: clicking the active button withdraws it,
+      // clicking the other replaces it. Every copy of these buttons for this
+      // story is updated, because the same story can be on screen twice (a
+      // card and the why-panel, or a row and a related item).
+      const wasOn = act.classList.contains('on');
+      const next = wasOn ? null : a;
+      document.querySelectorAll(`[data-id="${CSS.escape(id)}"]`).forEach((btn) => {
+        const kind = btn.dataset.act;
+        if (kind !== 'more' && kind !== 'less') return;
+        const on = kind === next;
+        btn.classList.toggle('on', on);
+        btn.setAttribute('aria-pressed', String(on));
+      });
+      track(next || 'feedback_clear', id);
+      return;
+    }
+
+    track(a, id);
+    act.classList.add('on');
+    if (a === 'hide') {
+      if (!act.closest('.rowacts')) act.textContent = '✓ Verborgen';
+      const card = document.querySelector(`[data-story="${CSS.escape(id)}"]`);
+      if (card) { card.style.opacity = '.35'; setTimeout(() => card.remove(), 450); }
+      closeSheet();
     }
     return;
   }

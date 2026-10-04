@@ -115,7 +115,7 @@ user_preferences      user_interactions      recommendations
 | `topics` | slug, label, soort (topic/category/person/org/place) |
 | `story_topics` | story ↔ topic met gewicht |
 | `user_preferences` | expliciete favorieten + instellingen |
-| `user_interactions` | open, open_article, save, hide, more, less (met tijdstempel) |
+| `user_interactions` | open, open_article, save, hide, more, less, feedback_clear (met tijdstempel) |
 | `recommendations` | laatst geserveerde Mijn-nieuws-ranglijst met redenen |
 
 ---
@@ -222,6 +222,31 @@ opent een paneel met alle redenen plus directe controles:
 privacyscherm waar je afzonderlijke geleerde interesses kunt laten vergeten of
 alles kunt wissen.
 
+### Duim omhoog/omlaag is één toestand, geen optelsom
+
+*Meer zo* en *Minder zo* vormen samen één drieweg-toestand per verhaal:
+omhoog, omlaag, of geen van beide.
+
+* Klik je op een actieve knop, dan **trek je je oordeel in**.
+* Klik je op de andere knop, dan **vervangt** die het eerdere oordeel.
+* Beide tegelijk actief is onmogelijk.
+
+Het gebeurtenislog blijft append-only (`more`, `less`, `feedback_clear`), maar
+de *huidige* toestand is het laatste oordeel per verhaal. Dat is essentieel:
+zou de ranking alle gebeurtenissen optellen, dan zouden een `more` (+3) en een
+latere `less` (−3) elkaar opheffen tot neutraal — precies het tegenovergestelde
+van wat die tweede klik vroeg.
+
+Het log wordt op `rowid` afgespeeld, niet op `created_at`: tijdstempels hebben
+secondenresolutie en id's zijn willekeurig, dus twee klikken binnen dezelfde
+seconde zouden anders in willekeurige volgorde worden herspeeld — juist het
+geval dat ontstaat wanneer je jezelf meteen corrigeert.
+
+De knoppen worden gerenderd vanuit het serverantwoord (veld `feedback` per
+verhaal), dus na herladen zie je nog steeds wat je gekozen hebt, en elke kopie
+van een verhaal op het scherm (kaart, tabelrij, Waarom-paneel) toont dezelfde
+toestand.
+
 Er worden uitsluitend topic-, uitgever- en verhaal-id's opgeslagen. Er worden
 geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 
@@ -281,6 +306,9 @@ roterend logbestand naar `data/nieuws.log` (plus `data/pm2-*.log` van pm2 zelf).
 ```powershell
 py -3.12 tools_rebuild.py              # taxonomie opnieuw toepassen + verhalen herbouwen
 py -3.12 tools_profile.py priority     # tijdsverdeling van een ronde meten
+py -3.12 tools_badge_audit.py          # welke verhalen 'Ontwikkelt zich' tonen en waarom
+py -3.12 tools_test_feedback.py        # duim omhoog/omlaag-toestandsmachine testen
+py -3.12 tools_profile_inspect.py      # favorieten, feedback en signalen bekijken
 py -3.12 tools_remove_publisher.py id  # uitgever + artikelen verwijderen
 ```
 
