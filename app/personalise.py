@@ -34,6 +34,8 @@ ACTION_WEIGHTS = {
     "hide": -2.0,
     "unhide": 0.0,
     "unread": 0.0,           # puts a read story back on the front page
+    "follow": 1.5,           # keep showing this story even after reading it
+    "unfollow": 0.0,
     "less": -3.0,
     "feedback_clear": 0.0,   # withdraws an earlier more/less on that story
 }
@@ -261,18 +263,49 @@ def read_state(user: str = USER) -> dict[str, str]:
     return _latest_state(user, READ_ACTIONS, ("unread",))
 
 
-def unread_story_ids(stories: list[dict], read: dict[str, str]) -> set[str]:
+def followed_story_ids(user: str = USER) -> set[str]:
+    """Stories you explicitly follow.
+
+    Following overrides the read filter: a followed story keeps its place on
+    the front page even after you have read it, so you can track a developing
+    story without it disappearing the moment you look at it.
+    """
+    return _toggle_state(user, "follow", "unfollow")
+
+
+def unread_story_ids(stories: list[dict], read: dict[str, str],
+                     followed: set[str] | None = None) -> set[str]:
     """Ids to keep on a 'what's new' surface.
 
     A story you read is suppressed only while it stays the story you read. If
     publishers have updated it since, it is news to you again, so it returns.
+    Explicitly followed stories are never suppressed.
     """
+    followed = followed or set()
     keep: set[str] = set()
     for s in stories:
+        if s["id"] in followed:
+            keep.add(s["id"])
+            continue
         read_at = read.get(s["id"])
         if read_at is None or (s.get("last_updated_at") or "") > read_at:
             keep.add(s["id"])
     return keep
+
+
+def followed_stories(user: str = USER) -> list[dict]:
+    """Followed stories that still exist, most recently updated first."""
+    ids = followed_story_ids(user)
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    rows = query(
+        f"""SELECT id, headline, summary, category, geo_scope, article_count,
+                   publisher_count, last_updated_at, image_url, is_updating,
+                   importance, frontpage_score
+            FROM stories WHERE id IN ({marks})
+            ORDER BY datetime(last_updated_at) DESC""", tuple(ids))
+    return [dict(r) for r in rows]
 
 
 def read_stories(user: str = USER) -> list[dict]:
@@ -357,7 +390,8 @@ def build_my_news(stories: list[dict], limit: int = 40, user: str = USER) -> dic
                                              "sc-heerenveen"))
 
     hide_read = get_setting("hide_read", "on", user) == "on"
-    unread = unread_story_ids(stories, read_state(user)) if hide_read else None
+    unread = (unread_story_ids(stories, read_state(user), followed_story_ids(user))
+              if hide_read else None)
     read_skipped = 0
 
     ids = [s["id"] for s in stories]
@@ -457,6 +491,7 @@ def privacy_snapshot(user: str = USER) -> dict:
     hidden = hidden_stories(user)
     feedback = explicit_feedback(user)
     read = read_state(user)
+    followed = followed_story_ids(user)
     return {
         "favourites": list_favourites(user),
         "interaction_counts": {r["action"]: r["n"] for r in counts},
@@ -469,6 +504,8 @@ def privacy_snapshot(user: str = USER) -> dict:
         "hidden_stories": hidden,
         "hidden_total": len(hidden_story_ids(user)),
         "read_total": len(read),
+        "followed_total": len(followed),
+        "followed_stories": followed_stories(user),
         "hide_read": get_setting("hide_read", "on", user) == "on",
         "feedback_counts": {
             "more": sum(1 for a, _t in feedback.values() if a == "more"),

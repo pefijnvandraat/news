@@ -160,6 +160,7 @@ def _decorate(stories: list[dict], with_articles: bool = False) -> list[dict]:
     saved = personalise.saved_story_ids()
     hidden = personalise.hidden_story_ids()
     feedback = personalise.explicit_feedback()
+    followed = personalise.followed_story_ids()
     arts: dict[str, list[dict]] = {}
     if with_articles and ids:
         marks = ",".join("?" * len(ids))
@@ -202,6 +203,7 @@ def _decorate(stories: list[dict], with_articles: bool = False) -> list[dict]:
             "saved": s["id"] in saved,
             "hidden": s["id"] in hidden,
             "feedback": (feedback.get(s["id"]) or (None,))[0],
+            "followed": s["id"] in followed,
             "score": s.get("score"),
             "reasons": s.get("reasons"),
             "discovery": s.get("discovery", False),
@@ -288,10 +290,11 @@ def frontpage(limit: int = Query(16, ge=1, le=60), include_read: bool = False):
     hide_read = (not include_read
                  and personalise.get_setting("hide_read", "on") == "on")
     read = personalise.read_state() if hide_read else {}
+    followed = personalise.followed_story_ids()
     skipped = {"count": 0}
 
     def is_read(row) -> bool:
-        if not hide_read:
+        if not hide_read or row["id"] in followed:
             return False
         read_at = read.get(row["id"])
         # Updated since you read it? Then it is news to you again.
@@ -499,6 +502,13 @@ def api_mark_unread(payload: dict = Body(default={})):
     """Put one story, or all of them, back on the front page."""
     story_id = (payload or {}).get("story_id")
     return {"ok": True, "restored": personalise.mark_unread(story_id)}
+
+
+@app.get("/api/followed")
+def api_followed():
+    """Stories you follow, so they stay on the front page after reading."""
+    rows = personalise.followed_stories()
+    return {"stories": _decorate(rows), "total": len(rows)}
 
 
 @app.post("/api/settings/hide-read")

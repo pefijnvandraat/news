@@ -115,7 +115,7 @@ user_preferences      user_interactions      recommendations
 | `topics` | slug, label, soort (topic/category/person/org/place) |
 | `story_topics` | story ↔ topic met gewicht |
 | `user_preferences` | expliciete favorieten + instellingen |
-| `user_interactions` | open, open_article, save, hide, unread, more, less, feedback_clear (met tijdstempel) |
+| `user_interactions` | open, open_article, save, hide, unread, follow, more, less, feedback_clear (met tijdstempel) |
 | `recommendations` | laatst geserveerde Mijn-nieuws-ranglijst met redenen |
 
 ---
@@ -227,6 +227,22 @@ dat er iets gebeurt.
 Zoeken, categorie- en onderwerppagina's filteren **niet** op gelezen: daar zoek
 je bewust iets op en wil je alles zien.
 
+### Dit volgen
+
+De knop **🔔 Dit volgen** houdt een verhaal op de Voorpagina en in Mijn nieuws
+staan, óók nadat je het gelezen hebt. Handig voor een lopend dossier dat je wilt
+blijven volgen. Gevolgde verhalen krijgen een oranje 🔔-badge; de privacypagina
+toont een overzicht met per verhaal een knop om te stoppen.
+
+### Toekomstige publicatiedata
+
+Uitgevers dateren een artikel soms in de toekomst — AD doet dat bij
+liveblog-items. Onbehandeld zou zo'n artikel *Laatste nieuws* permanent
+aanvoeren, nooit als gelezen kunnen gelden (de updatetijd is altijd nieuwer dan
+het moment waarop je het las) en onzinnige "x min geleden" tonen. Bij ingest
+wordt een datum die meer dan 10 minuten in de toekomst ligt daarom afgeklemd op
+het moment waarop we het artikel voor het eerst zagen.
+
 ## Ranking
 
 **Voorpagina** (identiek voor iedereen):
@@ -324,6 +340,7 @@ geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 | `POST /api/refresh?scope=full\|priority` | Handmatig ophalen + herclusteren |
 | `GET /api/frontpage` | Top / Laatste / Trending / Fryslân / per categorie (`include_read=true` toont ook gelezen verhalen) |
 | `GET /api/read`, `POST /api/read/unread` | Gelezen artikelen en ze terugzetten |
+| `GET /api/followed` | Verhalen die je volgt |
 | `POST /api/settings/hide-read` | Gelezen verhalen wel/niet verbergen |
 | `GET /api/stories` | Zoeken + filteren op `q, topic, publisher, category, location, hours, saved` |
 | `GET /api/stories/{id}` | Verhaaldetail met tijdlijn, bronartikelen, gerelateerd |
@@ -375,6 +392,8 @@ py -3.12 tools_badge_audit.py          # welke verhalen 'Ontwikkelt zich' tonen 
 py -3.12 tools_test_feedback.py        # duim omhoog/omlaag-toestandsmachine testen
 py -3.12 tools_test_toggles.py         # verbergen/bewaren-toggles testen
 py -3.12 tools_test_read.py            # gelezen/ongelezen-logica testen
+py -3.12 tools_test_follow.py          # volgen-logica testen
+py -3.12 tools_future_dates.py         # artikelen met toekomstige datum tonen
 py -3.12 tools_profile_inspect.py      # favorieten, feedback en signalen bekijken
 py -3.12 tools_remove_publisher.py id  # uitgever + artikelen verwijderen
 ```

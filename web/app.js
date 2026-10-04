@@ -110,6 +110,7 @@ function storyCard(s, variant = '') {
     s.is_updating
       ? `<span class="chip live" title="${esc(DEVELOPING.tooltip)}">${esc(DEVELOPING.label)}</span>`
       : '',
+    s.followed ? `<span class="chip follow" title="Je volgt dit verhaal">🔔 Gevolgd</span>` : '',
     s.updated_since_read
       ? `<span class="chip new" title="Bijgewerkt nadat je het las">Nieuw sinds gelezen</span>` : '',
     s.category_label ? `<span class="chip cat">${esc(s.category_label)}</span>` : '',
@@ -139,6 +140,7 @@ function storyCard(s, variant = '') {
       <div class="card-actions">
         <button class="mini ${s.saved ? 'on' : ''}" data-act="save" data-id="${esc(s.id)}"
           aria-pressed="${!!s.saved}">${s.saved ? '★ Bewaard' : '☆ Bewaar'}</button>
+        ${followButton(s)}
         ${feedbackButtons(s)}
         ${s.read_at
           ? `<button class="mini" data-unread="${esc(s.id)}" title="Terug naar de Voorpagina">↩ Ongelezen</button>`
@@ -265,6 +267,9 @@ function storyTable(rows, ctx = {}) {
         if (s.is_updating) {
           bits.push(`<span class="chip live" title="${esc(DEVELOPING.tooltip)}">${esc(DEVELOPING.label)}</span>`);
         }
+        if (s.followed) {
+          bits.push('<span class="chip follow" title="Je volgt dit verhaal">🔔</span>');
+        }
         if (s.updated_since_read) {
           bits.push('<span class="chip new" title="Bijgewerkt nadat je het las">Nieuw</span>');
         }
@@ -295,6 +300,9 @@ function storyTable(rows, ctx = {}) {
       <td class="col-actions"><div class="rowacts">
         <button class="mini ${s.saved ? 'on' : ''}" data-act="save" data-id="${esc(s.id)}"
           aria-pressed="${!!s.saved}" title="Bewaar">${s.saved ? '★' : '☆'}</button>
+        <button class="mini ${s.followed ? 'on' : ''}" data-act="follow" data-id="${esc(s.id)}"
+          aria-pressed="${!!s.followed}"
+          title="${s.followed ? 'Je volgt dit verhaal — klik om te stoppen' : 'Dit volgen: blijft op de Voorpagina, ook na lezen'}">🔔</button>
         <button class="mini ${s.feedback === 'more' ? 'on' : ''}" data-act="more" data-id="${esc(s.id)}"
           aria-pressed="${s.feedback === 'more'}"
           title="${s.feedback === 'more' ? 'Meer zo — klik om ongedaan te maken' : 'Meer zo'}">👍</button>
@@ -378,6 +386,21 @@ function feedbackButtons(s, size = 'mini') {
     <button class="${cls} ${down ? 'on' : ''}" data-act="less" data-id="${esc(s.id)}"
       aria-pressed="${down}" title="${down ? 'Klik om dit ongedaan te maken' : 'Minder verhalen zoals dit'}"
       >${label('👎 Minder zo', '👎 Minder zoals dit')}</button>`;
+}
+
+/* Following keeps a story on the front page after you have read it, so you can
+   track something developing without it vanishing the moment you look at it. */
+function followButton(s, size = 'mini') {
+  const on = !!s.followed;
+  const cls = size === 'mini' ? 'mini' : 'btn ghost';
+  const label = size === 'mini'
+    ? (on ? '🔔 Gevolgd' : '🔔 Dit volgen')
+    : (on ? '🔔 Je volgt dit verhaal' : '🔔 Dit volgen');
+  return `<button class="${cls} ${on ? 'on' : ''}" data-act="follow" data-id="${esc(s.id)}"
+    aria-pressed="${on}" title="${on
+      ? 'Je volgt dit verhaal — het blijft op de Voorpagina staan, ook als je het gelezen hebt. Klik om te stoppen.'
+      : 'Houd dit verhaal op de Voorpagina, ook nadat je het gelezen hebt'}"
+    >${label}</button>`;
 }
 
 function section(title, hint, stories, opts = {}) {
@@ -513,7 +536,8 @@ async function viewRead() {
           </label>
           <div style="margin-top:8px;font-size:13px">
             Een verhaal dat ná jouw leesmoment is bijgewerkt verschijnt opnieuw —
-            dan is het weer nieuw voor je.
+            dan is het weer nieuw voor je. Verhalen die je <strong>volgt</strong> (🔔)
+            blijven altijd staan, ook als je ze gelezen hebt.
           </div>
           ${d.total ? `<div style="margin-top:12px">
             <button class="btn ghost" data-action="unread-all">↩ Alles als ongelezen markeren</button>
@@ -629,21 +653,27 @@ async function viewStory(id) {
 
     main.innerHTML = `
       <article class="story">
-        <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px">
-          <span class="chip cat">${esc(s.category_label || '')}</span>
-          <span class="chip multi">${s.publisher_count} ${s.publisher_count === 1 ? 'uitgever' : 'uitgevers'} · ${s.article_count} artikelen</span>
-          ${s.is_updating ? `<span class="chip live" title="${esc(DEVELOPING.tooltip)}">${esc(DEVELOPING.label)}</span>` : ''}
-          ${s.geo_scope === 'fryslan' ? '<span class="chip">Fryslân</span>' : ''}
-        </div>
-        <h1>${esc(s.headline)}</h1>
-        <div class="meta-row" style="margin-bottom:14px">
-          <span>Laatste update ${clock(s.last_updated_at)} · ${ago(s.last_updated_at)}</span>
-          <span class="pubs">${pubBadges(s.publishers)}</span>
-        </div>
+        <header class="storyhead">
+          <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px">
+            <span class="chip cat">${esc(s.category_label || '')}</span>
+            <span class="chip multi">${s.publisher_count} ${s.publisher_count === 1 ? 'uitgever' : 'uitgevers'} · ${s.article_count} artikelen</span>
+            ${s.is_updating ? `<span class="chip live" title="${esc(DEVELOPING.tooltip)}">${esc(DEVELOPING.label)}</span>` : ''}
+            ${s.followed ? '<span class="chip follow" title="Je volgt dit verhaal">🔔 Gevolgd</span>' : ''}
+            ${s.geo_scope === 'fryslan' ? '<span class="chip">Fryslân</span>' : ''}
+          </div>
+          <h1>${esc(s.headline)}</h1>
+          <div class="meta-row">
+            <span>Laatste update ${clock(s.last_updated_at)} · ${ago(s.last_updated_at)}</span>
+            <span class="pubs">${pubBadges(s.publishers)}</span>
+          </div>
+        </header>
+
+        <div class="storycols">
+        <div class="storycol-main">
         ${s.is_updating ? `<div class="notice" style="border-left-color:var(--accent)">
             <strong>Dit verhaal ${esc(DEVELOPING.short)}.</strong> Een uitgever heeft een artikel
             herzien of er kwam recent nieuwe berichtgeving bij. Controleer de bronlinks
-            hieronder voor de actuele stand.</div>` : ''}
+            hiernaast voor de actuele stand.</div>` : ''}
         ${s.headline_source_name
           ? `<div style="font-size:12.5px;color:var(--faint);margin-bottom:10px">
                Kopregel overgenomen van ${esc(s.headline_source_name)} als meest neutrale formulering.</div>` : ''}
@@ -654,11 +684,10 @@ async function viewStory(id) {
         <div class="card-actions" style="margin-bottom:8px">
           <button class="mini ${s.saved ? 'on' : ''}" data-act="save" data-id="${esc(s.id)}"
             aria-pressed="${!!s.saved}">${s.saved ? '★ Bewaard' : '☆ Bewaar'}</button>
+          ${followButton(s)}
           ${feedbackButtons(s)}
         </div>
 
-        <div class="storycols">
-        <div class="storycol-main">
         ${(s.topics || []).length ? `<div class="sub">Onderwerpen & entiteiten</div>
           <div style="display:flex;gap:7px;flex-wrap:wrap">
             ${s.topics.map((t) => `<span class="chip topic" data-topic="${esc(t.slug)}">${esc(t.label)}</span>`).join('')}
@@ -672,7 +701,7 @@ async function viewStory(id) {
         </div>
 
         <div class="storycol-side">
-        <div class="sub">Zo brengen de uitgevers het (${(s.articles || []).length} artikelen)</div>
+        <div class="sub" style="margin-top:0">Zo brengen de uitgevers het (${(s.articles || []).length} artikelen)</div>
         <div class="src-list">${(s.articles || []).map((a) => `
           <div class="src">
             ${a.image_url ? `<img class="sthumb" loading="lazy" src="${esc(a.image_url)}" alt=""
@@ -761,8 +790,7 @@ async function viewPrivacy() {
                  <span class="c">${Math.round(t.score * 100)}% · vergeet ✕</span></button>`).join('')}</div>`
           : '<div style="color:var(--muted)">Nog niets geleerd — lees een paar verhalen.</div>'}
 
-        <div class="sub">Verborgen verhalen${d.hidden_total ? ` (${d.hidden_total})` : ''}</div>
-        ${d.hidden_total ? `
+        <div class="sub">Verborgen verhalen${d.hidden_total ? ` (${d.hidden_total})` : ''}</div>        ${d.hidden_total ? `
           <p style="color:var(--muted);font-size:14px;margin:0 0 12px">
             Deze verhalen zijn uit je feeds gefilterd. Zet ze terug om ze weer te zien.</p>
           <div class="hidden-list">
@@ -783,6 +811,23 @@ async function viewPrivacy() {
             <button class="btn ghost" data-action="unhide-all">↩ Alles weer tonen</button>
           </div>`
           : '<div style="color:var(--muted)">Je hebt niets verborgen.</div>'}
+
+        <div class="sub">Gevolgde verhalen${d.followed_total ? ` (${d.followed_total})` : ''}</div>
+        ${d.followed_total ? `
+          <p style="color:var(--muted);font-size:14px;margin:0 0 12px">
+            Deze blijven op de Voorpagina staan, ook nadat je ze gelezen hebt.</p>
+          <div class="hidden-list">
+            ${d.followed_stories.map((s) => `
+              <div class="hidden-row">
+                <div class="hr-body">
+                  <a href="#/story/${esc(s.id)}">${esc(s.headline)}</a>
+                  <span class="hr-meta">${esc(s.category || '')} · bijgewerkt ${ago(s.last_updated_at)}</span>
+                </div>
+                <button class="mini on" data-act="follow" data-id="${esc(s.id)}"
+                  aria-pressed="true" title="Klik om niet meer te volgen">🔔 Gevolgd</button>
+              </div>`).join('')}
+          </div>`
+          : '<div style="color:var(--muted)">Je volgt nog geen verhalen. Gebruik 🔔 Dit volgen op een verhaal.</div>'}
 
         <div class="sub">Expliciete feedback op verhalen</div>
         <div style="color:var(--muted);font-size:14px">
@@ -921,6 +966,25 @@ document.addEventListener('click', async (ev) => {
       if (act.closest('.rowacts')) act.textContent = on ? '★' : '☆';
       else act.textContent = on ? '★ Bewaard' : '☆ Bewaar';
       track(on ? 'save' : 'unsave', id);
+      return;
+    }
+
+    if (a === 'follow') {
+      // Toggle, and keep every copy of this story on screen in step.
+      const next = !act.classList.contains('on');
+      document.querySelectorAll(`[data-id="${CSS.escape(id)}"][data-act="follow"]`)
+        .forEach((btn) => {
+          btn.classList.toggle('on', next);
+          btn.setAttribute('aria-pressed', String(next));
+          const big = !btn.classList.contains('mini');
+          btn.textContent = next
+            ? (big ? '🔔 Je volgt dit verhaal' : '🔔 Gevolgd')
+            : '🔔 Dit volgen';
+          btn.title = next
+            ? 'Je volgt dit verhaal — het blijft op de Voorpagina staan, ook als je het gelezen hebt. Klik om te stoppen.'
+            : 'Houd dit verhaal op de Voorpagina, ook nadat je het gelezen hebt';
+        });
+      track(next ? 'follow' : 'unfollow', id);
       return;
     }
 

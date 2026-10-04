@@ -8,9 +8,14 @@
   --border: #e2e6ec;
   --text: #15181d;
   --muted: #5c6673;
-  --faint: #8c95a3;
+  --faint: #67707d;
   --accent: #b3001b;
   --accent-soft: #fdecef;
+  /* Text that sits on an accent/warn fill. Dark mode uses a light accent, so
+     white on it only reaches ~3:1 - below the 4.5:1 minimum for body text.
+     Flipping to dark ink there gets it to ~7:1. */
+  --on-accent: #ffffff;
+  --on-warn: #ffffff;
   --ai: #5b3df5;
   --ai-soft: #efecff;
   --ok: #117a3d;
@@ -33,9 +38,11 @@ html[data-theme="dark"] {
   --border: #2a313a;
   --text: #e8ecf1;
   --muted: #9aa5b4;
-  --faint: #76818f;
+  --faint: #828d9c;
   --accent: #ff5c72;
   --accent-soft: #38161c;
+  --on-accent: #1a0c10;
+  --on-warn: #251a06;
   --ai: #a898ff;
   --ai-soft: #241f45;
   --ok: #43c07a;
@@ -45,8 +52,9 @@ html[data-theme="dark"] {
 @media (prefers-color-scheme: dark) {
   html[data-theme="auto"] {
     --bg: #0d1013; --surface: #161a1f; --surface-2: #1d222a; --border: #2a313a;
-    --text: #e8ecf1; --muted: #9aa5b4; --faint: #76818f; --accent: #ff5c72;
-    --accent-soft: #38161c; --ai: #a898ff; --ai-soft: #241f45; --ok: #43c07a;
+    --text: #e8ecf1; --muted: #9aa5b4; --faint: #828d9c; --accent: #ff5c72;
+    --accent-soft: #38161c; --on-accent: #1a0c10; --on-warn: #251a06;
+    --ai: #a898ff; --ai-soft: #241f45; --ok: #43c07a;
     --warn: #e0a33a; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.45);
   }
 }
@@ -83,7 +91,7 @@ img { display: block; max-width: 100%; }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 800; letter-spacing: -.02em; }
 .brand-mark {
   width: 30px; height: 30px; border-radius: 8px; background: var(--accent);
-  color: #fff; display: grid; place-items: center; font-size: 17px; font-weight: 800;
+  color: var(--on-accent); display: grid; place-items: center; font-size: 17px; font-weight: 800;
 }
 .brand-text { font-size: 19px; }
 .mainnav { display: flex; gap: 4px; margin-left: 8px; }
@@ -92,7 +100,7 @@ img { display: block; max-width: 100%; }
   color: var(--muted); white-space: nowrap;
 }
 .mainnav a:hover { background: var(--surface-2); color: var(--text); }
-.mainnav a.active { background: var(--accent); color: #fff; }
+.mainnav a.active { background: var(--accent); color: var(--on-accent); }
 .search { margin-left: auto; display: flex; align-items: center; position: relative; }
 .search input {
   width: 260px; padding: 9px 36px 9px 14px; border-radius: 999px;
@@ -183,11 +191,12 @@ img { display: block; max-width: 100%; }
 }
 .chip.topic:hover { border-color: var(--accent); color: var(--accent); cursor: pointer; }
 .chip.cat { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
-.chip.live { background: var(--accent); color: #fff; border-color: transparent; }
+.chip.live { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 .chip.multi { background: var(--surface-2); color: var(--text); font-weight: 700; }
 .chip.ai { background: var(--ai-soft); color: var(--ai); border-color: transparent; }
 .chip.disc { background: var(--ai-soft); color: var(--ai); border-color: transparent; }
-.chip.new { background: var(--ok); color: #fff; border-color: transparent; }
+.chip.new { background: var(--ok); color: var(--on-accent); border-color: transparent; }
+.chip.follow { background: var(--warn); color: var(--on-warn); border-color: transparent; }
 
 .readnote {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -213,7 +222,7 @@ img { display: block; max-width: 100%; }
   background: var(--surface-2); color: var(--muted);
 }
 .mini:hover { color: var(--text); border-color: var(--faint); }
-.mini.on { background: var(--accent); color: #fff; border-color: transparent; }
+.mini.on { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 
 .why {
   display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ai);
@@ -231,7 +240,7 @@ img { display: block; max-width: 100%; }
   padding: 8px 14px;
 }
 .viewtoggle .vt:hover { background: var(--surface-2); color: var(--text); }
-.viewtoggle .vt.on { background: var(--accent); color: #fff; }
+.viewtoggle .vt.on { background: var(--accent); color: var(--on-accent); }
 
 /* ---------- list (table) view ---------- */
 .tablewrap {
@@ -362,7 +371,7 @@ button.why.linkish {
   background: var(--surface); color: var(--muted); font-size: 13.5px; font-weight: 600;
 }
 .pill:hover { border-color: var(--accent); color: var(--accent); }
-.pill.on { background: var(--accent); color: #fff; border-color: transparent; }
+.pill.on { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 
 /* ---------- states ---------- */
 .state { text-align: center; padding: 56px 20px; color: var(--muted); }
@@ -370,7 +379,7 @@ button.why.linkish {
 .state h3 { margin: 0 0 6px; color: var(--text); font-size: 19px; }
 .state button {
   margin-top: 14px; padding: 9px 18px; border-radius: 9px; border: 0;
-  background: var(--accent); color: #fff; font-weight: 600;
+  background: var(--accent); color: var(--on-accent); font-weight: 600;
 }
 .skel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .skel .sk { background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 37%, var(--surface-2) 63%); background-size: 400% 100%; animation: sh 1.3s ease infinite; }
@@ -390,22 +399,28 @@ button.why.linkish {
 .story > .warn-box,
 .story > .notice,
 .story > p,
-.story > div:not(.related-wrap):not(.grid):not(.storycols) {
+.storyhead > h1,
+.storyhead > .meta-row,
+.storycol-main > .ai-box,
+.storycol-main > .warn-box,
+.storycol-main > .notice,
+.storycol-main > p,
+.storycol-main > div:not(.card-actions) {
   max-width: var(--prose);
 }
 .story .related-wrap { max-width: none; }
+.storyhead { margin-bottom: 20px; }
+.storyhead .meta-row { margin-top: 10px; }
 
-/* Below the summary the page splits: topics and the publication timeline on
-   the left, the publishers' own articles on the right. That is the comparison
-   this page exists for, and it is what finally earns the extra width instead
-   of leaving a blank half-screen. */
-.storycols { display: grid; gap: 28px; align-items: start; }
+/* The two columns start directly under the headline rather than after the
+   summary, so the publishers' articles fill the top-right instead of leaving
+   it blank while the reader is still on the first paragraph. */
+.storycols { display: grid; gap: 28px 32px; align-items: start; }
 .storycol-main > .timeline { max-width: var(--prose); }
 @media (min-width: 1200px) {
   .storycols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .storycol-side { position: sticky; top: 76px; }
-  .storycol-side .src-list { max-height: calc(100vh - 140px); overflow-y: auto; }
-  /* The left column is already narrower than the prose cap here. */
+  .storycol-side .src-list { max-height: calc(100vh - 150px); overflow-y: auto; }
   .storycol-main > .timeline { max-width: none; }
 }
 @media (min-width: 1700px) {
@@ -471,12 +486,18 @@ button.why.linkish {
 .fav-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
 .fav {
   display: flex; align-items: center; gap: 10px; padding: 12px 14px;
-  border: 1px solid var(--border); border-radius: 11px; background: var(--surface); text-align: left;
+  border: 1px solid var(--border); border-radius: 11px; background: var(--surface);
+  /* A <button> defaults to the OS button text colour (black). Without this the
+     label was black on a near-black surface in dark mode - about 1.1:1, which
+     is effectively invisible. It only looked fine in light mode by accident. */
+  color: var(--text);
+  text-align: left;
 }
 .fav:hover { border-color: var(--accent); }
-.fav.on { background: var(--accent); color: #fff; border-color: transparent; }
+.fav.on { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 .fav .n { font-weight: 650; font-size: 14.5px; flex: 1; }
-.fav .c { font-size: 11.5px; opacity: .7; }
+.fav .c { font-size: 11.5px; color: var(--faint); }
+.fav.on .c { color: color-mix(in srgb, var(--on-accent) 75%, transparent); }
 .addrow { display: flex; gap: 8px; margin: 12px 0 22px; flex-wrap: wrap; }
 .addrow input {
   flex: 1; min-width: 220px; padding: 10px 14px; border-radius: 10px;
@@ -484,10 +505,10 @@ button.why.linkish {
 }
 .addrow button, .btn {
   padding: 10px 18px; border-radius: 10px; border: 0;
-  background: var(--accent); color: #fff; font-weight: 650;
+  background: var(--accent); color: var(--on-accent); font-weight: 650;
 }
 .btn.ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
-.btn.ghost.on, .btn.on { background: var(--accent); color: #fff; border-color: transparent; }
+.btn.ghost.on, .btn.on { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 .btn.danger { background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }
 
 table.src-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }

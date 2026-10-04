@@ -6,6 +6,7 @@ clustering, ranking and the API never see feed quirks.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
 from . import topics as T
 from .db import one, tx
@@ -14,6 +15,20 @@ from .util import (canonical_url, iso, new_id, now, parse_dt, sha1, strip_html,
                    truncate)
 
 MIN_TITLE = 8
+
+# Publishers occasionally stamp an article in the future - AD does it for
+# live-blog entries. Left alone those articles outrank everything in "Laatste
+# nieuws" forever, can never be marked read (their update time is always newer
+# than the moment you read them), and show nonsense relative times. A small
+# tolerance absorbs clock skew between us and the publisher.
+FUTURE_TOLERANCE = timedelta(minutes=10)
+
+
+def _clamp_future(dt, seen_at):
+    """Return dt, or the time we first saw it when dt lies in the future."""
+    if dt is None:
+        return None
+    return seen_at if dt - seen_at > FUTURE_TOLERANCE else dt
 
 
 def normalise(item: RawItem, source: dict) -> dict | None:
@@ -27,10 +42,11 @@ def normalise(item: RawItem, source: dict) -> dict | None:
 
     canon = canonical_url(url)
     description = truncate(strip_html(item.description), 600) or None
-    published = parse_dt(item.published_at)
-    updated = parse_dt(item.updated_at) or published
+    seen_at = now()
+    published = _clamp_future(parse_dt(item.published_at), seen_at)
+    updated = _clamp_future(parse_dt(item.updated_at), seen_at) or published
     if published is None:
-        published = updated or now()
+        published = updated or seen_at
     if updated is not None and published is not None and updated < published:
         updated = published
 
