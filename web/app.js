@@ -75,7 +75,9 @@ function storyCard(s, variant = '') {
   const chips = [
     multi ? `<span class="chip multi">${s.publisher_count} uitgevers</span>`
           : `<span class="chip">1 artikel</span>`,
-    s.is_updating ? `<span class="chip live">Wordt bijgewerkt</span>` : '',
+    s.is_updating
+      ? `<span class="chip live" title="Dit verhaal is nog in beweging: een uitgever heeft een artikel herzien of er kwam recent nieuwe berichtgeving bij.">Wordt bijgewerkt</span>`
+      : '',
     s.category_label ? `<span class="chip cat">${esc(s.category_label)}</span>` : '',
     s.discovery ? `<span class="chip disc">Ontdekking</span>` : '',
   ].filter(Boolean).join('');
@@ -289,7 +291,7 @@ async function viewStory(id) {
         <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px">
           <span class="chip cat">${esc(s.category_label || '')}</span>
           <span class="chip multi">${s.publisher_count} ${s.publisher_count === 1 ? 'uitgever' : 'uitgevers'} · ${s.article_count} artikelen</span>
-          ${s.is_updating ? '<span class="chip live">Wordt bijgewerkt</span>' : ''}
+          ${s.is_updating ? '<span class="chip live" title="Nog in beweging">Wordt bijgewerkt</span>' : ''}
           ${s.geo_scope === 'fryslan' ? '<span class="chip">Fryslân</span>' : ''}
         </div>
         <h1>${esc(s.headline)}</h1>
@@ -297,6 +299,10 @@ async function viewStory(id) {
           <span>Laatste update ${clock(s.last_updated_at)} · ${ago(s.last_updated_at)}</span>
           <span class="pubs">${pubBadges(s.publishers)}</span>
         </div>
+        ${s.is_updating ? `<div class="notice" style="border-left-color:var(--accent)">
+            <strong>Dit verhaal wordt nog bijgewerkt.</strong> Een uitgever heeft een artikel
+            herzien of er kwam recent nieuwe berichtgeving bij. Controleer de bronlinks
+            hieronder voor de actuele stand.</div>` : ''}
         ${s.headline_source_name
           ? `<div style="font-size:12.5px;color:var(--faint);margin-bottom:10px">
                Kopregel overgenomen van ${esc(s.headline_source_name)} als meest neutrale formulering.</div>` : ''}

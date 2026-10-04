@@ -11,7 +11,16 @@ import re
 from collections import Counter
 
 from .topics import tokenize
-from .util import iso, parse_dt, strip_html, truncate
+from .util import age_hours, iso, parse_dt, strip_html, truncate
+
+# "Wordt bijgewerkt" must mean the story is moving *now*. Two separate traps:
+#   * no recency gate -> a story keeps the badge days after it settled;
+#   * too short a span -> a story that merely broke an hour ago and was picked
+#     up by four outlets at once looks "developing", which is just normal
+#     clustering. Real updating means movement that continues well after the
+#     initial burst of coverage.
+DEVELOPING_RECENT_HOURS = 3.0       # last activity must be at least this fresh
+DEVELOPING_MIN_SPAN_HOURS = 3.0     # and coverage must still be arriving late
 
 # Headline noise publishers add that is not part of the fact.
 _PREFIX_NOISE = re.compile(
@@ -42,9 +51,7 @@ def build_story_view(members: list[dict]) -> dict:
     disagreements = _disagreements(members)
     image = next((m.get("image_url") for m in ordered[::-1] if m.get("image_url")), None)
     scopes = Counter(m.get("geo_scope") or "nl" for m in members)
-    is_updating = 1 if (any(int(m.get("revision") or 1) > 1 for m in members)
-                        or (len(members) > 1 and first and last
-                            and (last - first).total_seconds() > 3600)) else 0
+    is_updating = _is_developing(members, first, last)
 
     return {
         "headline": headline,
@@ -62,6 +69,28 @@ def build_story_view(members: list[dict]) -> dict:
 
 def _ts(m: dict) -> str | None:
     return m.get("updated_at") or m.get("published_at")
+
+
+def _is_developing(members: list[dict], first, last) -> int:
+    """Is this story still actively being updated?
+
+    Distinguishes "still unfolding" from "broke recently". Two independent
+    pieces of evidence, both requiring recent activity:
+
+      * a publisher revised an article after publishing it - unambiguous, a
+        revision only happens when the text actually changed; or
+      * coverage is still arriving hours after the first report, rather than
+        several outlets publishing at once, which is ordinary clustering.
+
+    The recency gate matters most: a story that broke yesterday and has since
+    settled is not "being updated", however heavily it was covered at the time.
+    """
+    if last is None or age_hours(last) > DEVELOPING_RECENT_HOURS:
+        return 0
+    if any(int(m.get("revision") or 1) > 1 for m in members):
+        return 1
+    return 1 if (len(members) > 1 and first is not None
+                 and (last - first).total_seconds() / 3600.0 >= DEVELOPING_MIN_SPAN_HOURS) else 0
 
 
 def clean_headline(title: str) -> str:
