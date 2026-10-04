@@ -355,7 +355,53 @@ function viewToolbar() {
       <button class="vt ${state.view === 'list' ? 'on' : ''}" data-view="list"
         title="Compacte lijst zonder afbeeldingen, sorteerbaar en filterbaar">☰ Lijst</button>
     </div>
+    ${quickFilterBar()}
   </div>`;
+}
+
+/* The chip row lives in the view toolbar rather than in a band of its own:
+   that row is on every news page and its right half is empty, so quick
+   filters cost no extra vertical space above the news. */
+function quickFilterBar() {
+  const list = state.quickfilters || [];
+  const active = currentFilterQs();
+  const chips = list.map((f) => `
+    <a class="qf ${f.qs === active ? 'on' : ''}" href="#/filter?${f.qs}"
+       title="${esc(describeQs(f.qs))}"
+       ${f.qs === active ? 'aria-current="true"' : ''}>${esc(f.label)}</a>`).join('');
+  return `<div class="qfbar" id="qfbar">
+    ${chips || '<span class="qf-empty">Nog geen snelfilters</span>'}
+    <button class="qf qf-add" data-qf-manage title="Snelfilters beheren"
+            aria-label="Snelfilters beheren">+</button>
+  </div>`;
+}
+
+/* Turns a stored query string into something a reader recognises, using the
+   same labels the dropdowns use. Also feeds the suggested name when saving. */
+function describeQs(qs) {
+  const m = state.meta || { categories: [], publishers: [] };
+  const p = new URLSearchParams(qs);
+  const parts = [];
+  if (p.get('q')) parts.push(`“${p.get('q')}”`);
+  if (p.get('topic')) parts.push(p.get('topic').replace(/-/g, ' '));
+  if (p.get('category')) {
+    parts.push(m.categories.find((c) => c.slug === p.get('category'))?.label
+      || p.get('category'));
+  }
+  if (p.get('publisher')) {
+    parts.push(m.publishers.find((x) => x.id === p.get('publisher'))?.name
+      || p.get('publisher'));
+  }
+  if (p.get('location')) {
+    parts.push({ fryslan: 'Fryslân', nl: 'Nederland', world: 'Buitenland' }[p.get('location')]
+      || p.get('location'));
+  }
+  if (p.get('hours')) {
+    parts.push({ 6: 'laatste 6 uur', 24: 'laatste 24 uur', 72: 'laatste 3 dagen',
+      168: 'laatste week' }[p.get('hours')] || `laatste ${p.get('hours')} uur`);
+  }
+  if (p.get('saved')) parts.push('bewaard');
+  return parts.join(' · ') || 'Geen filter';
 }
 
 /* Re-render just the table after a sort/filter change, without refetching. */
@@ -605,6 +651,12 @@ async function viewFavorites() {
       </section>
 
       <section class="section">
+        <div class="section-head"><h2>Snelfilters</h2>
+          <span class="hint">Bewaarde filtercombinaties, zichtbaar boven elke nieuwspagina</span></div>
+        <div id="qfmanager">${quickFilterManager()}</div>
+      </section>
+
+      <section class="section">
         <div class="section-head"><h2>Beheer</h2></div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <a class="btn ghost" href="#/sources">Bronnen beheren</a>
@@ -649,7 +701,23 @@ function filterBar() {
     <select data-f="hours"><option value="">Elke periode</option>
       ${[['6', 'Laatste 6 uur'], ['24', 'Laatste 24 uur'], ['72', 'Laatste 3 dagen'],
          ['168', 'Laatste week']].map(([v, l]) => opt(v, l, f.hours)).join('')}</select>
+    ${saveFilterButton()}
   </div>`;
+}
+
+/* Offered at the moment the filter exists, so it never has to be rebuilt in a
+   settings screen. Disabled rather than hidden when there is nothing to save,
+   so its presence is learned before it is needed. */
+function saveFilterButton() {
+  const qs = currentFilterQs();
+  const existing = (state.quickfilters || []).find((x) => x.qs === qs);
+  if (existing) {
+    return `<span class="qf-saved" title="Dit filter staat al in je balk als ‘${
+      esc(existing.label)}’">★ Bewaard als ${esc(existing.label)}</span>`;
+  }
+  return `<button class="btn ghost small" data-qf-save ${qs ? '' : 'disabled'}
+    title="${qs ? 'Bewaar deze filtercombinatie als snelfilter'
+      : 'Stel eerst een filter in'}">★ Bewaar als snelfilter</button>`;
 }
 
 async function viewStory(id) {
@@ -1077,6 +1145,77 @@ async function runStockSearch(term) {
     </li>`).join('')}</ul>`;
 }
 
+/* ------------------------------------------------- quick filter managing */
+async function loadQuickFilters() {
+  try {
+    state.quickfilters = (await API.get('/api/quickfilters')).filters || [];
+  } catch { state.quickfilters = []; }
+}
+
+/* Repaint the chips and the save button in place. A full route() would reload
+   the stories, which is wasteful when only the chip row changed. */
+function refreshQuickFilterUi() {
+  const bar = $('#qfbar');
+  if (bar) bar.outerHTML = quickFilterBar();
+  const fb = $('#filterbar');
+  if (fb) {
+    const old = fb.querySelector('[data-qf-save], .qf-saved');
+    if (old) old.outerHTML = saveFilterButton();
+  }
+}
+
+async function saveCurrentFilter() {
+  const qs = currentFilterQs();
+  if (!qs) return;
+  const label = prompt('Naam voor dit snelfilter:', describeQs(qs).slice(0, 40));
+  if (label === null) return;
+  try {
+    await API.post('/api/quickfilters', { label: label.trim(), qs });
+    await loadQuickFilters();
+    refreshQuickFilterUi();
+  } catch (e) { alert('Bewaren mislukt: ' + apiMessage(e)); }
+}
+
+function quickFilterManager() {
+  const list = state.quickfilters || [];
+  if (!list.length) {
+    return `<p class="muted">Je hebt nog geen snelfilters. Stel op een zoek- of
+      filterpagina een filter in en klik daar op <strong>★ Bewaar als
+      snelfilter</strong>.</p>`;
+  }
+  return `<ul class="qf-list">${list.map((f, i) => `
+    <li class="qf-row">
+      <div class="qf-move">
+        <button class="icon-btn tiny" data-qf-up="${esc(f.slug)}" ${i === 0 ? 'disabled' : ''}
+                aria-label="Omhoog" title="Omhoog">▲</button>
+        <button class="icon-btn tiny" data-qf-down="${esc(f.slug)}"
+                ${i === list.length - 1 ? 'disabled' : ''}
+                aria-label="Omlaag" title="Omlaag">▼</button>
+      </div>
+      <div class="qf-body">
+        <strong>${esc(f.label)}</strong>
+        <span class="qf-desc">${esc(describeQs(f.qs))}</span>
+      </div>
+      <a class="btn ghost small" href="#/filter?${f.qs}">Openen</a>
+      <button class="btn ghost small" data-qf-rename="${esc(f.slug)}"
+              data-label="${esc(f.label)}">Hernoemen</button>
+      <button class="btn ghost small" data-qf-del="${esc(f.slug)}">Verwijderen</button>
+    </li>`).join('')}</ul>`;
+}
+
+async function moveQuickFilter(slug, delta) {
+  const list = [...(state.quickfilters || [])];
+  const i = list.findIndex((f) => f.slug === slug);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  await API.post('/api/quickfilters/order', { slugs: list.map((f) => f.slug) });
+  await loadQuickFilters();
+  const host = $('#qfmanager');
+  if (host) host.innerHTML = quickFilterManager();
+  refreshQuickFilterUi();
+}
+
 /* ---------------------------------------------------------------- sheet */
 function openSheet(title, html) {
   $('#sheet-title').textContent = title;
@@ -1118,19 +1257,56 @@ const routes = [
   [/^#\/favorites$/, viewFavorites],
   [/^#\/sources$/, viewSources],
   [/^#\/privacy$/, viewPrivacy],
-  [/^#\/saved$/, () => viewList('Bewaard', 'Verhalen die je hebt bewaard', 'saved=true&limit=60')],
-  [/^#\/topic\/(.+)$/, (m) => viewList(decodeURIComponent(m[1]).replace(/-/g, ' '),
-    'Alle verhalen over dit onderwerp', `topic=${encodeURIComponent(m[1])}&limit=60`)],
-  [/^#\/category\/(.+)$/, (m) => viewList(
-    state.meta?.categories.find((c) => c.slug === m[1])?.label || m[1],
-    'Categorie', `category=${encodeURIComponent(m[1])}&limit=60`)],
+  [/^#\/saved$/, () => viewFiltered(new URLSearchParams('saved=true'),
+    'Bewaard', 'Verhalen die je hebt bewaard')],
+  [/^#\/topic\/(.+)$/, (m) => viewFiltered(
+    new URLSearchParams({ topic: decodeURIComponent(m[1]) }),
+    decodeURIComponent(m[1]).replace(/-/g, ' '), 'Alle verhalen over dit onderwerp')],
+  [/^#\/category\/(.+)$/, (m) => viewFiltered(
+    new URLSearchParams({ category: decodeURIComponent(m[1]) }),
+    state.meta?.categories.find((c) => c.slug === m[1])?.label || m[1], 'Categorie')],
   [/^#\/story\/(.+)$/, (m) => viewStory(m[1])],
+  // Search and filter are the same view; both carry their full state in the
+  // hash so a filtered page can be bookmarked, reloaded and recognised as the
+  // active quick filter.
   [/^#\/search$/, () => {
-    const q = new URLSearchParams(location.hash.split('?')[1] || '').get('q') || '';
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    const q = params.get('q') || '';
     $('#search').value = q;
-    return viewList(`Zoeken: “${q}”`, 'Resultaten', `q=${encodeURIComponent(q)}&limit=60`);
+    return viewFiltered(params, `Zoeken: “${q}”`, 'Resultaten');
+  }],
+  [/^#\/filter$/, () => {
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    $('#search').value = params.get('q') || '';
+    return viewFiltered(params, 'Gefilterde verhalen', 'Actieve filters');
   }],
 ];
+
+/* Restores the dropdowns from the hash, then renders. Without this a reload
+   or a quick-filter click would show filtered results above empty dropdowns. */
+function viewFiltered(params, title, hint) {
+  state.filters = {};
+  for (const [k, v] of params) {
+    if (k !== 'limit' && v) state.filters[k] = v;
+  }
+  const qs = currentFilterQs();
+  const match = (state.quickfilters || []).find((f) => f.qs === qs);
+  return viewList(match ? match.label : title, match ? 'Snelfilter' : hint,
+                  `${qs}&limit=60`);
+}
+
+/* The canonical query string for whatever is filtered right now. Mirrors the
+   server's normalise(): same fields, same order, so the two agree on when a
+   quick filter is active. */
+const QF_FIELDS = ['q', 'topic', 'publisher', 'category', 'location', 'hours', 'saved'];
+function currentFilterQs(filters = state.filters) {
+  const p = new URLSearchParams();
+  QF_FIELDS.forEach((k) => {
+    const v = (filters[k] ?? '').toString().trim();
+    if (v) p.set(k, k === 'saved' ? 'true' : v);
+  });
+  return p.toString();
+}
 
 function route() {
   const hash = location.hash || '#/front';
@@ -1282,6 +1458,53 @@ document.addEventListener('click', async (ev) => {
   const srcDel = t.closest('[data-src-del]');
   if (srcDel) { await API.del(`/api/sources/${srcDel.dataset.srcDel}`); viewSources(); return; }
 
+  const qfSave = t.closest('[data-qf-save]');
+  if (qfSave) { ev.preventDefault(); await saveCurrentFilter(); return; }
+
+  const qfManage = t.closest('[data-qf-manage]');
+  if (qfManage) {
+    ev.preventDefault();
+    // The + is the only entry point visible while reading, so it has to do
+    // both jobs: save what is on screen, or take you to the full list.
+    const qs = currentFilterQs();
+    const known = (state.quickfilters || []).some((f) => f.qs === qs);
+    if (qs && !known) await saveCurrentFilter();
+    else location.hash = '#/favorites';
+    return;
+  }
+
+  const qfDel = t.closest('[data-qf-del]');
+  if (qfDel) {
+    ev.preventDefault();
+    await API.del(`/api/quickfilters/${encodeURIComponent(qfDel.dataset.qfDel)}`);
+    await loadQuickFilters();
+    const host = $('#qfmanager');
+    if (host) host.innerHTML = quickFilterManager();
+    refreshQuickFilterUi();
+    return;
+  }
+
+  const qfRename = t.closest('[data-qf-rename]');
+  if (qfRename) {
+    ev.preventDefault();
+    const label = prompt('Nieuwe naam:', qfRename.dataset.label || '');
+    if (label === null || !label.trim()) return;
+    try {
+      await API.send(`/api/quickfilters/${encodeURIComponent(qfRename.dataset.qfRename)}`,
+        'PATCH', { label: label.trim() });
+      await loadQuickFilters();
+      const host = $('#qfmanager');
+      if (host) host.innerHTML = quickFilterManager();
+      refreshQuickFilterUi();
+    } catch (e) { alert('Hernoemen mislukt: ' + apiMessage(e)); }
+    return;
+  }
+
+  const qfUp = t.closest('[data-qf-up]');
+  if (qfUp) { ev.preventDefault(); await moveQuickFilter(qfUp.dataset.qfUp, -1); return; }
+  const qfDown = t.closest('[data-qf-down]');
+  if (qfDown) { ev.preventDefault(); await moveQuickFilter(qfDown.dataset.qfDown, 1); return; }
+
   const stockAdd = t.closest('[data-stock-add]');
   if (stockAdd) {
     ev.preventDefault();
@@ -1405,9 +1628,10 @@ document.addEventListener('change', async (ev) => {
   const f = ev.target.closest('[data-f]');
   if (!f) return;
   state.filters[f.dataset.f] = f.value;
-  const qs = Object.entries(state.filters).filter(([, v]) => v)
-    .map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-  viewList('Gefilterde verhalen', 'Actieve filters', `${qs}&limit=60`);
+  // Go through the hash rather than rendering directly: that keeps the URL
+  // honest, makes the view bookmarkable, and lets the chip row notice when the
+  // filter matches a saved one.
+  location.hash = `#/filter?${currentFilterQs()}`;
 });
 
 /* Text filters should narrow as you type, not only on blur. */
@@ -1549,7 +1773,7 @@ window.addEventListener('hashchange', route);
   if (savedView === 'list' || savedView === 'cards') state.view = savedView;
   ticker.paused = localStorage.getItem('nieuws-ticker') === 'paused';
   wireTicker();
-  await loadMeta();
+  await Promise.all([loadMeta(), loadQuickFilters()]);
   route();
   loadTicker();
   setInterval(loadMeta, 60000);

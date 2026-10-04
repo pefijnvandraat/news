@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 import os
 
-from . import config, personalise, stocks
+from . import config, personalise, quickfilters, stocks
 from .cluster import recluster
 from .db import init_db, one, query, tx
 from .ingest.discover import discover
@@ -379,11 +379,30 @@ def stories(q: str | None = None, topic: str | None = None, publisher: str | Non
         params += list(ids)
 
     clause = ("WHERE " + " AND ".join(wheres)) if wheres else ""
-    total = one(f"SELECT COUNT(*) AS n FROM stories s {clause}", params)["n"]
-    rows = [dict(r) for r in query(
-        f"SELECT s.* FROM stories s {clause} ORDER BY s.frontpage_score DESC LIMIT ? OFFSET ?",
-        (*params, limit, offset))]
+
+    # Hidden stories must be excluded before counting, otherwise the header
+    # promises more results than the list can ever show.
     hidden = personalise.hidden_story_ids()
+    count_clause, count_params = clause, list(params)
+    if hidden and len(hidden) < 900:        # stay well under SQLite's variable cap
+        joiner = " AND " if wheres else "WHERE "
+        count_clause = f"{clause}{joiner}s.id NOT IN ({','.join('?' * len(hidden))})"
+        count_params += list(hidden)
+        total = one(f"SELECT COUNT(*) AS n FROM stories s {count_clause}",
+                    count_params)["n"]
+    elif hidden:
+        ids = {r["id"] for r in query(f"SELECT s.id FROM stories s {clause}", params)}
+        total = len(ids - set(hidden))
+    else:
+        total = one(f"SELECT COUNT(*) AS n FROM stories s {clause}", params)["n"]
+
+    # Exclude hidden stories inside the query where possible, so LIMIT applies
+    # to rows the reader will actually see instead of trimming the page after
+    # the fact.
+    rows = [dict(r) for r in query(
+        f"SELECT s.* FROM stories s {count_clause} "
+        "ORDER BY s.frontpage_score DESC LIMIT ? OFFSET ?",
+        (*count_params, limit, offset))]
     rows = [r for r in rows if r["id"] not in hidden]
     return {"stories": _decorate(rows), "total": total}
 
@@ -688,6 +707,42 @@ def add_stock(payload: dict = Body(...)):
 def delete_stock(symbol: str):
     stocks.remove(symbol)
     return {"ok": True}
+
+
+@app.get("/api/quickfilters")
+def list_quickfilters():
+    return {"filters": quickfilters.list_all(), "max": quickfilters.MAX_FILTERS}
+
+
+@app.post("/api/quickfilters")
+def add_quickfilter(payload: dict = Body(...)):
+    try:
+        return quickfilters.add(payload.get("label") or "", payload.get("qs") or "")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.patch("/api/quickfilters/{slug}")
+def rename_quickfilter(slug: str, payload: dict = Body(...)):
+    try:
+        quickfilters.rename(slug, payload.get("label") or "")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except LookupError:
+        raise HTTPException(404, "onbekend snelfilter")
+    return {"ok": True}
+
+
+@app.delete("/api/quickfilters/{slug}")
+def delete_quickfilter(slug: str):
+    quickfilters.remove(slug)
+    return {"ok": True}
+
+
+@app.post("/api/quickfilters/order")
+def reorder_quickfilters(payload: dict = Body(...)):
+    quickfilters.reorder(payload.get("slugs") or [])
+    return {"ok": True, "filters": quickfilters.list_all()}
 
 
 # ---------------------------------------------------------------------------

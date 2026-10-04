@@ -223,6 +223,67 @@ zodat opgeslagen interacties blijven kloppen.
 
 ---
 
+## Snelfilters
+
+Een snelfilter is een bewaarde filtercombinatie. Ze staan als chips **in de
+bestaande weergavebalk**, rechts naast `▦ Kaarten | ☰ Lijst` — die rij staat al
+op elke nieuwspagina en was rechts leeg, dus de chips kosten geen enkele pixel
+extra hoogte boven het nieuws. Je hebt al een topbalk, een ticker en deze rij;
+een vierde band erbij zou te veel zijn.
+
+Drie plekken, drie taken:
+
+| Waar | Waarvoor |
+|------|----------|
+| Chips in de weergavebalk | Gebruiken — één klik vanaf elke nieuwspagina |
+| `★ Bewaar als snelfilter` in de filterbalk | Maken — op het moment dat het filter er net is |
+| Sectie **Snelfilters** op Favorieten | Beheren — hernoemen, volgorde, verwijderen |
+
+### Opgeslagen als querystring, niet als zes velden
+
+De gefilterde weergave wordt al volledig beschreven door haar URL. Eén string
+bewaren betekent dat opslaan, herstellen, vergelijken en delen hetzelfde ding
+zijn — en een nieuwe filterdimensie later kost geen migratie.
+
+"Canoniek" betekent: alleen bekende velden, waarden gevalideerd, lege
+weggelaten, **sleutels in een vaste volgorde**. Dat laatste is wat het laat
+werken: zonder die volgorde zouden `category=tech&hours=24` en
+`hours=24&category=tech` hetzelfde filter zijn maar ongelijk vergelijken, en
+dan kan de balk nooit weten welke chip actief is. Nu herkent hij ook een
+duplicaat dat je in een andere volgorde opbouwt.
+
+Onbekende sleutels worden weggegooid in plaats van geweigerd, zodat een bewaard
+filter blijft werken als een toekomstige versie een veld niet meer gebruikt.
+
+### De URL werd onderweg eerlijk gemaakt
+
+De dropdowns riepen eerder `viewList()` rechtstreeks aan **zonder de URL bij te
+werken**. Een gefilterde weergave was dus niet te bookmarken, ging verloren bij
+herladen, en een snelfilter kon onmogelijk "gewoon een URL herstellen". Er is nu
+een echte route `#/filter?<qs>`; ook `#/search`, `#/topic/…`, `#/category/…` en
+`#/saved` lopen er doorheen, zodat op al die pagina's de dropdowns kloppen met
+wat je ziet — en je ze dus ook als snelfilter kunt bewaren.
+
+### Verdere keuzes
+
+* **De voorgestelde naam** wordt afgeleid uit de actieve filters met dezelfde
+  labels als de dropdowns: `Sport · Fryslân`, `Technologie · laatste week`.
+* **De bewaarknop is uitgeschakeld, niet verborgen** als er niets te bewaren is,
+  zodat je hem leert kennen vóór je hem nodig hebt. Staat het filter er al, dan
+  staat er `★ Bewaard als …`.
+* **De `+` doet twee dingen**: staat er een ongesaved filter op het scherm, dan
+  bewaart hij dat; anders brengt hij je naar het beheer. Het is het enige
+  aanknopingspunt dat zichtbaar is tijdens het lezen.
+* **Een gedeeltelijke herordening laat niets vallen**: niet genoemde filters
+  schuiven erachter, met hun onderlinge volgorde intact.
+* **Op mobiel** staan de chips onder de weergaveknoppen op één scrollbare regel.
+  Laten wrappen maakte de balk 116 px hoog en duwde het eerste bericht van het
+  scherm; scrollen kost één veegbeweging, 80 px chrome kost elk bezoek.
+
+Maximaal 12 snelfilters.
+
+---
+
 ## Nieuwsticker
 
 Direct onder de adresbalk loopt een strook met de huidige topkoppen. Klik op een
@@ -487,6 +548,9 @@ geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 | `GET /api/ticker` | Topkoppen (ingekort) plus de gekozen koersen, in één ronde |
 | `GET POST DELETE /api/stocks` | Fondsen in de ticker beheren |
 | `GET /api/stocks/search?q=` | Bedrijfsnaam of ticker opzoeken |
+| `GET POST /api/quickfilters` | Snelfilters tonen en bewaren |
+| `PATCH DELETE /api/quickfilters/{slug}` | Hernoemen en verwijderen |
+| `POST /api/quickfilters/order` | Volgorde van de chips |
 
 ---
 
