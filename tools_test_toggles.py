@@ -23,11 +23,11 @@ def check(label, got, want):
 
 
 def hidden():
-    return story in P.hidden_story_ids(USER)
+    return story in P.hidden_story_ids(user=USER)
 
 
 def saved():
-    return story in P.saved_story_ids(USER)
+    return story in P.saved_story_ids(user=USER)
 
 
 check("start: niet verborgen", hidden(), False)
@@ -51,12 +51,12 @@ check("opnieuw bewaren", saved(), True)
 # unhide_all moet alles terugzetten
 P.record_interaction("hide", story_id=story, user=USER)
 P.record_interaction("hide", story_id=other, user=USER)
-n = P.unhide_all(USER)
-check("unhide_all zet beide terug", (n, len(P.hidden_story_ids(USER))), (2, 0))
+n = P.unhide_all(user=USER)
+check("unhide_all zet beide terug", (n, len(P.hidden_story_ids(user=USER))), (2, 0))
 
 # hidden_stories levert leesbare rijen
 P.record_interaction("hide", story_id=story, user=USER)
-listed = P.hidden_stories(USER)
+listed = P.hidden_stories(user=USER)
 check("hidden_stories geeft kop terug",
       bool(listed) and bool(listed[0].get("headline")), True)
 

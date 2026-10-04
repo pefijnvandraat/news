@@ -21,7 +21,9 @@ from .ranking import (diversify, load_story_topics, my_news_score,
 from .topics import topic_kind, topic_label
 from .util import age_hours, iso, new_id, now, parse_dt
 
-USER = "local"
+# The single account everything used before sign-in existed. Kept only so the
+# one-off migration can find that data; nothing writes to it any more.
+LEGACY_USER = "local"
 
 # How much each observed action says about interest. Negative actions are
 # weaker in magnitude than explicit "less like this".
@@ -52,7 +54,7 @@ SERENDIPITY_EVERY = 7     # 1 discovery slot per 7 personalised stories
 # ---------------------------------------------------------------------------
 # Favourites
 # ---------------------------------------------------------------------------
-def list_favourites(user: str = USER) -> list[dict]:
+def list_favourites(*, user: str) -> list[dict]:
     rows = query(
         "SELECT topic_slug, weight, created_at FROM user_preferences "
         "WHERE user_id=? AND kind='favorite_topic' ORDER BY created_at",
@@ -61,7 +63,7 @@ def list_favourites(user: str = USER) -> list[dict]:
              "weight": r["weight"], "since": r["created_at"]} for r in rows]
 
 
-def add_favourite(slug: str, label: str | None = None, user: str = USER) -> dict:
+def add_favourite(slug: str, label: str | None = None, *, user: str) -> dict:
     ts = iso(now())
     with tx() as c:
         if not c.execute("SELECT id FROM topics WHERE slug=?", (slug,)).fetchone():
@@ -75,19 +77,19 @@ def add_favourite(slug: str, label: str | None = None, user: str = USER) -> dict
     return {"slug": slug, "label": label or _label(slug)}
 
 
-def remove_favourite(slug: str, user: str = USER) -> None:
+def remove_favourite(slug: str, *, user: str) -> None:
     with tx() as c:
         c.execute("DELETE FROM user_preferences WHERE user_id=? AND kind='favorite_topic' "
                   "AND topic_slug=?", (user, slug))
 
 
-def get_setting(key: str, default: str, user: str = USER) -> str:
+def get_setting(key: str, default: str, *, user: str) -> str:
     row = one("SELECT value FROM user_preferences WHERE user_id=? AND kind='setting' "
               "AND topic_slug=?", (user, key))
     return row["value"] if row else default
 
 
-def set_setting(key: str, value: str, user: str = USER) -> None:
+def set_setting(key: str, value: str, *, user: str) -> None:
     ts = iso(now())
     with tx() as c:
         c.execute(
@@ -103,7 +105,7 @@ def set_setting(key: str, value: str, user: str = USER) -> None:
 # ---------------------------------------------------------------------------
 def record_interaction(action: str, story_id: str | None = None,
                        article_id: str | None = None,
-                       publisher_id: str | None = None, user: str = USER) -> None:
+                       publisher_id: str | None = None, *, user: str) -> None:
     if action not in ACTION_WEIGHTS:
         return
     with tx() as c:
@@ -119,7 +121,7 @@ def _decay(created_at: str) -> float:
     return math.pow(0.5, days / HALF_LIFE_DAYS)
 
 
-def explicit_feedback(user: str = USER) -> dict[str, tuple[str, str]]:
+def explicit_feedback(*, user: str) -> dict[str, tuple[str, str]]:
     """Current thumbs up/down per story as (action, timestamp).
 
     Replays the log in insert order and keeps only the last verdict, so
@@ -160,7 +162,7 @@ def _topics_for_stories(story_ids) -> dict[str, list[str]]:
     return out
 
 
-def learned_interests(user: str = USER) -> dict[str, float]:
+def learned_interests(*, user: str) -> dict[str, float]:
     """Decayed topic affinity inferred from behaviour, normalised to -1..1.
 
     Implicit signals come from the event log; explicit thumbs up/down is
@@ -179,7 +181,7 @@ def learned_interests(user: str = USER) -> dict[str, float]:
     for r in rows:
         acc[r["slug"]] += r["weight"] * _decay(r["created_at"])
 
-    feedback = explicit_feedback(user)
+    feedback = explicit_feedback(user=user)
     topics = _topics_for_stories(feedback)
     for story_id, (action, ts) in feedback.items():
         weight = ACTION_WEIGHTS[action] * _decay(ts)
@@ -192,7 +194,7 @@ def learned_interests(user: str = USER) -> dict[str, float]:
     return {k: max(-1.0, min(1.0, v / peak)) for k, v in acc.items() if abs(v) > 0.05}
 
 
-def publisher_affinity(user: str = USER) -> dict[str, float]:
+def publisher_affinity(*, user: str) -> dict[str, float]:
     rows = query(
         "SELECT publisher_id, weight, created_at FROM user_interactions "
         "WHERE user_id=? AND publisher_id IS NOT NULL", (user,))
@@ -203,20 +205,20 @@ def publisher_affinity(user: str = USER) -> dict[str, float]:
     return {k: max(0.0, v / peak) for k, v in acc.items()}
 
 
-def negative_signals(user: str = USER) -> dict[str, float]:
+def negative_signals(*, user: str) -> dict[str, float]:
     """Per-story suppression from an active 'less like this' or a hide.
 
     Only the *current* verdict counts, so withdrawing a thumbs-down lifts the
     suppression instead of leaving it in the log forever.
     """
     acc: dict[str, float] = defaultdict(float)
-    hidden = hidden_story_ids(user)
+    hidden = hidden_story_ids(user=user)
     for r in query(
         "SELECT story_id, created_at FROM user_interactions "
         "WHERE user_id=? AND action='hide' AND story_id IS NOT NULL", (user,)):
         if r["story_id"] in hidden:
             acc[r["story_id"]] += 1.0 * _decay(r["created_at"])
-    for story_id, (action, ts) in explicit_feedback(user).items():
+    for story_id, (action, ts) in explicit_feedback(user=user).items():
         if action == "less":
             acc[story_id] += 0.7 * _decay(ts)
     return acc
@@ -249,7 +251,7 @@ def _toggle_state(user: str, on_action: str, off_action: str) -> set[str]:
     return set(_latest_state(user, (on_action,), (off_action,)))
 
 
-def hidden_story_ids(user: str = USER) -> set[str]:
+def hidden_story_ids(*, user: str) -> set[str]:
     return _toggle_state(user, "hide", "unhide")
 
 
@@ -258,12 +260,12 @@ def hidden_story_ids(user: str = USER) -> set[str]:
 READ_ACTIONS = ("open", "open_article")
 
 
-def read_state(user: str = USER) -> dict[str, str]:
+def read_state(*, user: str) -> dict[str, str]:
     """Story id -> when you last read it."""
     return _latest_state(user, READ_ACTIONS, ("unread",))
 
 
-def followed_story_ids(user: str = USER) -> set[str]:
+def followed_story_ids(*, user: str) -> set[str]:
     """Stories you explicitly follow.
 
     Following overrides the read filter: a followed story keeps its place on
@@ -293,9 +295,9 @@ def unread_story_ids(stories: list[dict], read: dict[str, str],
     return keep
 
 
-def followed_stories(user: str = USER) -> list[dict]:
+def followed_stories(*, user: str) -> list[dict]:
     """Followed stories that still exist, most recently updated first."""
-    ids = followed_story_ids(user)
+    ids = followed_story_ids(user=user)
     if not ids:
         return []
     marks = ",".join("?" * len(ids))
@@ -308,9 +310,9 @@ def followed_stories(user: str = USER) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def read_stories(user: str = USER) -> list[dict]:
+def read_stories(*, user: str) -> list[dict]:
     """Stories you have read that still exist, most recently read first."""
-    read = read_state(user)
+    read = read_state(user=user)
     if not read:
         return []
     marks = ",".join("?" * len(read))
@@ -329,22 +331,22 @@ def read_stories(user: str = USER) -> list[dict]:
     return out
 
 
-def mark_unread(story_id: str | None = None, user: str = USER) -> int:
+def mark_unread(story_id: str | None = None, *, user: str) -> int:
     """Put one story, or everything, back on the front page."""
-    ids = [story_id] if story_id else list(read_state(user))
+    ids = [story_id] if story_id else list(read_state(user=user))
     for sid in ids:
         record_interaction("unread", story_id=sid, user=user)
     return len(ids)
 
 
-def hidden_stories(user: str = USER) -> list[dict]:
+def hidden_stories(*, user: str) -> list[dict]:
     """Hidden stories that still exist, newest hide first.
 
     A story can disappear from the corpus once its articles age out, so the
     hide record can outlive the story it refers to. Those are reported as a
     count rather than listed, since there is nothing left to restore.
     """
-    ids = hidden_story_ids(user)
+    ids = hidden_story_ids(user=user)
     if not ids:
         return []
     marks = ",".join("?" * len(ids))
@@ -365,32 +367,32 @@ def hidden_stories(user: str = USER) -> list[dict]:
     return out
 
 
-def unhide_all(user: str = USER) -> int:
-    ids = hidden_story_ids(user)
+def unhide_all(*, user: str) -> int:
+    ids = hidden_story_ids(user=user)
     for story_id in ids:
         record_interaction("unhide", story_id=story_id, user=user)
     return len(ids)
 
 
-def saved_story_ids(user: str = USER) -> set[str]:
+def saved_story_ids(*, user: str) -> set[str]:
     return _toggle_state(user, "save", "unsave")
 
 
 # ---------------------------------------------------------------------------
 # Personalised feed
 # ---------------------------------------------------------------------------
-def build_my_news(stories: list[dict], limit: int = 40, user: str = USER) -> dict:
-    favourites = {f["slug"]: f["weight"] for f in list_favourites(user)}
-    learned_all = learned_interests(user)
+def build_my_news(stories: list[dict], limit: int = 40, *, user: str) -> dict:
+    favourites = {f["slug"]: f["weight"] for f in list_favourites(user=user)}
+    learned_all = learned_interests(user=user)
     learned = {k: v for k, v in learned_all.items() if v > 0}
-    pub_aff = publisher_affinity(user)
-    negatives = negative_signals(user)
-    hidden = hidden_story_ids(user)
+    pub_aff = publisher_affinity(user=user)
+    negatives = negative_signals(user=user)
+    hidden = hidden_story_ids(user=user)
     regional = any(s in favourites for s in ("friesland", "fryslan", "makkum",
                                              "sc-heerenveen"))
 
-    hide_read = get_setting("hide_read", "on", user) == "on"
-    unread = (unread_story_ids(stories, read_state(user), followed_story_ids(user))
+    hide_read = get_setting("hide_read", "on", user=user) == "on"
+    unread = (unread_story_ids(stories, read_state(user=user), followed_story_ids(user=user))
               if hide_read else None)
     read_skipped = 0
 
@@ -467,8 +469,7 @@ def _cold_start(ranked: list[dict]) -> list[dict]:
     return ranked
 
 
-def store_recommendations(stories: list[dict], surface: str = "mynews",
-                          user: str = USER) -> None:
+def store_recommendations(stories: list[dict], surface: str = "mynews", *, user: str) -> None:
     ts = iso(now())
     with tx() as c:
         c.execute("DELETE FROM recommendations WHERE user_id=? AND surface=?", (user, surface))
@@ -483,30 +484,30 @@ def store_recommendations(stories: list[dict], surface: str = "mynews",
 # ---------------------------------------------------------------------------
 # Privacy controls
 # ---------------------------------------------------------------------------
-def privacy_snapshot(user: str = USER) -> dict:
+def privacy_snapshot(*, user: str) -> dict:
     counts = query(
         "SELECT action, COUNT(*) AS n FROM user_interactions WHERE user_id=? GROUP BY action",
         (user,))
-    learned = learned_interests(user)
-    hidden = hidden_stories(user)
-    feedback = explicit_feedback(user)
-    read = read_state(user)
-    followed = followed_story_ids(user)
+    learned = learned_interests(user=user)
+    hidden = hidden_stories(user=user)
+    feedback = explicit_feedback(user=user)
+    read = read_state(user=user)
+    followed = followed_story_ids(user=user)
     return {
-        "favourites": list_favourites(user),
+        "favourites": list_favourites(user=user),
         "interaction_counts": {r["action"]: r["n"] for r in counts},
         "total_interactions": sum(r["n"] for r in counts),
         "learned_interests": sorted(
             ({"slug": k, "label": _label(k), "score": round(v, 3)}
              for k, v in learned.items() if v > 0),
             key=lambda x: -x["score"])[:40],
-        "publisher_affinity": {k: round(v, 3) for k, v in publisher_affinity(user).items()},
+        "publisher_affinity": {k: round(v, 3) for k, v in publisher_affinity(user=user).items()},
         "hidden_stories": hidden,
-        "hidden_total": len(hidden_story_ids(user)),
+        "hidden_total": len(hidden_story_ids(user=user)),
         "read_total": len(read),
         "followed_total": len(followed),
-        "followed_stories": followed_stories(user),
-        "hide_read": get_setting("hide_read", "on", user) == "on",
+        "followed_stories": followed_stories(user=user),
+        "hide_read": get_setting("hide_read", "on", user=user) == "on",
         "feedback_counts": {
             "more": sum(1 for a, _t in feedback.values() if a == "more"),
             "less": sum(1 for a, _t in feedback.values() if a == "less"),
@@ -515,7 +516,7 @@ def privacy_snapshot(user: str = USER) -> dict:
     }
 
 
-def reset_learned(user: str = USER) -> int:
+def reset_learned(*, user: str) -> int:
     with tx() as c:
         n = c.execute("SELECT COUNT(*) AS n FROM user_interactions WHERE user_id=?",
                       (user,)).fetchone()["n"]
@@ -524,7 +525,41 @@ def reset_learned(user: str = USER) -> int:
     return n
 
 
-def forget_topic(slug: str, user: str = USER) -> None:
+def claim_legacy_data(user: str) -> int:
+    """Hand the pre-sign-in data to its rightful owner, once.
+
+    Everything used to live under a single account called "local". Rather than
+    discard someone's favourites, reading history and quick filters, the first
+    sign-in by the designated owner takes them over.
+
+    Idempotent: once the legacy rows are gone there is nothing left to move,
+    and it refuses to run for a user who already has data of their own, so a
+    misconfigured owner cannot swallow another account's history.
+    """
+    if user == LEGACY_USER:
+        return 0
+    moved = 0
+    with tx() as c:
+        left = c.execute(
+            "SELECT (SELECT COUNT(*) FROM user_preferences WHERE user_id=?) "
+            "     + (SELECT COUNT(*) FROM user_interactions WHERE user_id=?) AS n",
+            (LEGACY_USER, LEGACY_USER)).fetchone()["n"]
+        if not left:
+            return 0
+        mine = c.execute(
+            "SELECT (SELECT COUNT(*) FROM user_preferences WHERE user_id=?) "
+            "     + (SELECT COUNT(*) FROM user_interactions WHERE user_id=?) AS n",
+            (user, user)).fetchone()["n"]
+        if mine:
+            return 0
+        for table in ("user_preferences", "user_interactions", "recommendations"):
+            cur = c.execute(f"UPDATE {table} SET user_id=? WHERE user_id=?",
+                            (user, LEGACY_USER))
+            moved += cur.rowcount or 0
+    return moved
+
+
+def forget_topic(slug: str, *, user: str) -> None:
     """Remove an inferred interest without touching explicit favourites."""
     with tx() as c:
         c.execute(

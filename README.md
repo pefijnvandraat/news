@@ -551,6 +551,110 @@ geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 | `GET POST /api/quickfilters` | Snelfilters tonen en bewaren |
 | `PATCH DELETE /api/quickfilters/{slug}` | Hernoemen en verwijderen |
 | `POST /api/quickfilters/order` | Volgorde van de chips |
+| `GET /api/me` | Wie er is aangemeld, plus de afmeldlink |
+
+---
+
+## Aanmelden en meerdere gebruikers
+
+Iedereen heeft een eigen account. Favorieten, leesgeschiedenis, snelfilters,
+koersen, gevolgde en verborgen verhalen zijn **persoonlijk**; de artikelen, de
+verhalen en de bronnen zijn **gedeeld** — één ingest voor iedereen in plaats
+van zeven keer dezelfde feeds ophalen.
+
+> **De bug die dit oploste.** Voor deze wijziging stond overal `user_id =
+> 'local'` hardcoded. Iedereen deelde dus één account: jouw favoriet verscheen
+> bij de rest, een artikel dat jij las verdween bij iedereen van de voorpagina,
+> en — het ergste — **de pagina "Gelezen nieuwsartikelen" toonde de gezamenlijke
+> leesgeschiedenis**. Dat was een privacylek, geen cosmetisch ongemak.
+
+### App Service Authentication, geen eigen inlogcode
+
+De aanmelding draait op **Easy Auth**: het platform handelt het hele
+OAuth-verkeer af vóór een aanvraag Python bereikt, en geeft het resultaat door
+als headers. Er staat dus geen sessiebeheer, tokenvalidatie of CSRF-afhandeling
+in deze codebase — precies de dingen waar zelfbouw misgaat.
+
+`app/identity.py` leest die headers en beslist drie dingen:
+
+* **Gekoppeld aan e-mailadres, niet aan de provider-id.** Vandaag met Microsoft
+  aanmelden en morgen met Google hoort op je eigen favorieten uit te komen, niet
+  op een tweede leeg account. Het adres is het enige dat beide providers delen.
+* **Dicht bij twijfel.** Ontbreken de headers, of staat Easy Auth niet
+  aantoonbaar aan, dan wordt elke aanvraag geweigerd. Easy Auth strípt
+  inkomende `X-MS-CLIENT-PRINCIPAL*`-headers — maar alleen zolang het aanstaat.
+  Zonder die controle zou iedereen die headers zelf kunnen meesturen en
+  daarmee iedereen kunnen zijn.
+* **Gastenlijst standaard dicht.** Microsoft- en Google-accounts zijn gratis en
+  wereldwijd, dus "aangemeld" is niet hetzelfde als "uitgenodigd". Een lege
+  lijst wordt behandeld als een gesloten deur, niet als een open deur.
+
+### Wat het tenantbeleid afdwingt
+
+Deze tenant (*Microsoft Non-Production*) is streng, en dat beperkt de
+Microsoft-aanmelding op twee manieren die het vermelden waard zijn:
+
+| Wat | Gevolg |
+|-----|--------|
+| Alleen `AzureADMyOrg` toegestaan | Microsoft-aanmelding werkt **alleen voor accounts in deze tenant**. Persoonlijke accounts (outlook, hotmail, live) en andere organisaties zijn geblokkeerd — `AzureADandPersonalMicrosoftAccount` en `AzureADMultipleOrgs` worden allebei door beleid geweigerd. |
+| Client secrets max ~14 dagen | Daarom gebruikt deze opzet **geen client secret**. Easy Auth draait op de `id_token`-flow, die er geen nodig heeft. Scheelt een aanmelding die elke twee weken omvalt. |
+
+**Google is daarom geen luxe maar de route voor iedereen buiten deze tenant.**
+Google loopt niet via Entra en heeft met dit beleid niets te maken.
+
+### Google aanzetten
+
+Vereist een Google Cloud-project, en dat kan alleen met een Google-account.
+`tools_add_google.py` bevat het recept (ongeveer vijf minuten, gratis) en
+regelt daarna de rest:
+
+```powershell
+py -3.12 tools_add_google.py <client-id> <client-secret>
+```
+
+### Wie mag erin
+
+```powershell
+py -3.12 tools_users.py                       # tonen
+py -3.12 tools_users.py add iemand@gmail.com  # toevoegen
+py -3.12 tools_users.py remove iemand@...     # verwijderen
+```
+
+Een regel die met `@` begint laat een heel domein toe. Het script weigert de
+laatste gebruiker te verwijderen — dat zou iedereen buitensluiten, inclusief
+jezelf.
+
+### Een vergeten plek moet luid falen
+
+Alle functies in `personalise.py` hebben `user` als **verplichte,
+keyword-only** parameter. Er is geen standaardwaarde meer. Dat is bewust: met
+`user: str = USER` zou een vergeten aanroep stilletjes andermans gegevens lezen
+of schrijven — onzichtbaar bij testen met één gebruiker. Nu levert zo'n plek
+een `TypeError` op.
+
+`tools_test_isolation.py` bewijst het van de andere kant: gebruiker A doet iets,
+en de test controleert dat B het **niet** ziet — voor favorieten,
+leesgeschiedenis, verborgen, gevolgd, bewaard, duimpjes, instellingen,
+snelfilters, koersen en het privacy-overzicht. 26 controles.
+
+### De oude gegevens
+
+Alles van vóór de aanmelding stond onder het account `local`. Bij de eerste
+aanmelding van de eigenaar (`NIEUWS_LEGACY_OWNER`) wordt dat overgenomen in
+plaats van weggegooid. De overdracht is idempotent en weigert te lopen voor een
+gebruiker die al eigen gegevens heeft, zodat een verkeerd ingestelde eigenaar
+niet andermans geschiedenis kan opslokken.
+
+### Instellingen
+
+| Instelling | Betekenis |
+|---|---|
+| `NIEUWS_ALLOWED_USERS` | Gastenlijst, komma-gescheiden. `@domein.nl` laat een heel domein toe. |
+| `NIEUWS_LEGACY_OWNER` | Wie de `local`-gegevens erft. |
+| `NIEUWS_AUTH_ACTIVE` | Bevestigt dat Easy Auth aanstaat. Eigen vlag, omdat App Service `WEBSITE_AUTH_ENABLED` niet zet bij Easy Auth v2 én de naam reserveert. |
+| `NIEUWS_DEV_USER` | Account dat lokaal wordt gebruikt (standaard `local`). |
+
+`/api/health` staat bewust buiten de aanmelding, zodat monitoring blijft werken.
 
 ---
 

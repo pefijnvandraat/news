@@ -25,7 +25,7 @@ def check(label, got, want):
 
 def visible(sid):
     return sid in P.unread_story_ids(
-        stories, P.read_state(USER), P.followed_story_ids(USER))
+        stories, P.read_state(user=USER), P.followed_story_ids(user=USER))
 
 
 check("start: zichtbaar", visible(story), True)
@@ -35,7 +35,7 @@ check("na lezen: verdwenen", visible(story), False)
 
 P.record_interaction("follow", story_id=story, user=USER)
 check("na volgen: weer zichtbaar", visible(story), True)
-check("staat in followed_story_ids", story in P.followed_story_ids(USER), True)
+check("staat in followed_story_ids", story in P.followed_story_ids(user=USER), True)
 
 P.record_interaction("unfollow", story_id=story, user=USER)
 check("na ontvolgen: weer verdwenen", visible(story), False)
@@ -51,13 +51,13 @@ P.record_interaction("follow", story_id=other, user=USER)
 P.record_interaction("open", story_id=other, user=USER)
 check("eerst volgen, dan lezen: blijft", visible(other), True)
 
-listed = P.followed_stories(USER)
+listed = P.followed_stories(user=USER)
 check("followed_stories levert koppen",
       len(listed) == 2 and all(s.get("headline") for s in listed), True)
 
 # uitgezet filter laat alles zien, volgen verandert daar niets aan
 check("ongevolgd verhaal nog steeds verborgen",
-      visible(story) and story in P.followed_story_ids(USER), True)
+      visible(story) and story in P.followed_story_ids(user=USER), True)
 
 with tx() as c:
     c.execute("DELETE FROM user_interactions WHERE user_id=?", (USER,))

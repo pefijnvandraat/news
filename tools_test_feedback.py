@@ -14,8 +14,8 @@ with tx() as c:
 
 
 def state():
-    fb = P.explicit_feedback(USER).get(story)
-    neg = P.negative_signals(USER).get(story, 0.0)
+    fb = P.explicit_feedback(user=USER).get(story)
+    neg = P.negative_signals(user=USER).get(story, 0.0)
     return (fb[0] if fb else None), round(neg, 3)
 
 
@@ -43,9 +43,9 @@ results = [
 
 # Topic affinity must not keep a withdrawn verdict.
 P.record_interaction("more", story_id=story, user=USER)
-with_more = P.learned_interests(USER)
+with_more = P.learned_interests(user=USER)
 P.record_interaction("feedback_clear", story_id=story, user=USER)
-cleared = P.learned_interests(USER)
+cleared = P.learned_interests(user=USER)
 same = with_more != cleared
 print("%-28s -> affinity verandert na intrekken: %s" % ("learned_interests", "OK" if same else "FAIL"))
 results.append(same)

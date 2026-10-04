@@ -184,18 +184,18 @@ def quotes(symbols: list[str], force: bool = False) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Watchlist (stored alongside the other user preferences)
 # ---------------------------------------------------------------------------
-def watchlist() -> list[dict]:
+def watchlist(user: str) -> list[dict]:
     rows = query("SELECT topic_slug, value, created_at FROM user_preferences "
-                 "WHERE kind='stock' ORDER BY rowid")
+                 "WHERE user_id=? AND kind='stock' ORDER BY rowid", (user,))
     return [{"symbol": r["topic_slug"], "name": r["value"] or r["topic_slug"],
              "since": r["created_at"]} for r in rows]
 
 
-def add(symbol: str, name: str | None = None) -> dict:
+def add(user: str, symbol: str, name: str | None = None) -> dict:
     symbol = (symbol or "").strip().upper()
     if not symbol:
         raise ValueError("symbool ontbreekt")
-    current = watchlist()
+    current = watchlist(user)
     if any(w["symbol"] == symbol for w in current):
         return {"ok": True, "already": True}
     if len(current) >= MAX_WATCHLIST:
@@ -210,20 +210,21 @@ def add(symbol: str, name: str | None = None) -> dict:
     ts = iso(now())
     with tx() as c:
         c.execute("INSERT INTO user_preferences(id,user_id,kind,topic_slug,value,"
-                  "weight,created_at,updated_at) VALUES(?,'local','stock',?,?,1.0,?,?)",
-                  (new_id("stk_"), symbol, name or quote.get("name") or symbol, ts, ts))
+                  "weight,created_at,updated_at) VALUES(?,?,'stock',?,?,1.0,?,?)",
+                  (new_id("stk_"), user, symbol,
+                   name or quote.get("name") or symbol, ts, ts))
     return {"ok": True, "quote": quote}
 
 
-def remove(symbol: str) -> None:
+def remove(user: str, symbol: str) -> None:
     with tx() as c:
-        c.execute("DELETE FROM user_preferences WHERE kind='stock' AND topic_slug=?",
-                  ((symbol or "").strip().upper(),))
+        c.execute("DELETE FROM user_preferences WHERE user_id=? AND kind='stock' "
+                  "AND topic_slug=?", (user, (symbol or "").strip().upper()))
 
 
-def ticker_quotes(force: bool = False) -> list[dict]:
+def ticker_quotes(user: str, force: bool = False) -> list[dict]:
     """Watchlist quotes, keeping the user's own label and ordering."""
-    watched = watchlist()
+    watched = watchlist(user)
     if not watched:
         return []
     live = {q["symbol"].upper(): q for q in quotes([w["symbol"] for w in watched], force)}

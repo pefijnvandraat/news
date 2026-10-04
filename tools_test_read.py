@@ -26,7 +26,7 @@ def check(label, got, want):
 def is_unread(sid, stories=None):
     stories = stories or [dict(r) for r in query(
         "SELECT id, last_updated_at FROM stories WHERE id IN (?,?)", (story, other))]
-    return sid in P.unread_story_ids(stories, P.read_state(USER))
+    return sid in P.unread_story_ids(stories, P.read_state(user=USER))
 
 
 check("start: ongelezen", is_unread(story), True)
@@ -50,9 +50,9 @@ check("lezen -> ongelezen -> lezen", is_unread(story), False)
 future = iso(now().replace(year=now().year + 1))
 fake = [{"id": story, "last_updated_at": future}]
 check("bijgewerkt na lezen: komt terug",
-      story in P.unread_story_ids(fake, P.read_state(USER)), True)
+      story in P.unread_story_ids(fake, P.read_state(user=USER)), True)
 
-listed = P.read_stories(USER)
+listed = P.read_stories(user=USER)
 check("read_stories bevat het verhaal",
       any(s["id"] == story and s.get("headline") for s in listed), True)
 check("read_stories meldt bijwerking", listed[0]["updated_since_read"], False)

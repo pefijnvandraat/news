@@ -10,6 +10,8 @@ sys.path.insert(0, ".")
 from app import stocks  # noqa: E402
 from app.db import query, tx  # noqa: E402
 
+TEST_USER = "u:testsuite@example.invalid"
+
 ok = fail = 0
 
 
@@ -22,12 +24,12 @@ def check(label, got, want):
 
 def snapshot():
     return [r["topic_slug"] for r in
-            query("SELECT topic_slug FROM user_preferences WHERE kind='stock' ORDER BY rowid")]
+            query("SELECT topic_slug FROM user_preferences WHERE kind='stock' AND user_id='u:testsuite@example.invalid' ORDER BY rowid")]
 
 
 saved = snapshot()
 with tx() as c:
-    c.execute("DELETE FROM user_preferences WHERE kind='stock'")
+    c.execute("DELETE FROM user_preferences WHERE kind='stock' AND user_id='u:testsuite@example.invalid'")
 
 try:
     # --- labelling -------------------------------------------------------
@@ -40,26 +42,26 @@ try:
           len(stocks.short_label("T-Rex 2X Long Microsoft Daily Target ETF", "MSFX")) <= 22, True)
 
     # --- watchlist -------------------------------------------------------
-    check("begint leeg", stocks.watchlist(), [])
-    stocks.add("HEIA.AS", "Heineken N.V.")
-    check("na toevoegen", [w["symbol"] for w in stocks.watchlist()], ["HEIA.AS"])
+    check("begint leeg", stocks.watchlist(TEST_USER), [])
+    stocks.add(TEST_USER, "HEIA.AS", "Heineken N.V.")
+    check("na toevoegen", [w["symbol"] for w in stocks.watchlist(TEST_USER)], ["HEIA.AS"])
 
-    check("dubbel toevoegen meldt already", stocks.add("HEIA.AS").get("already"), True)
-    check("en voegt niets toe", len(stocks.watchlist()), 1)
+    check("dubbel toevoegen meldt already", stocks.add(TEST_USER, "HEIA.AS").get("already"), True)
+    check("en voegt niets toe", len(stocks.watchlist(TEST_USER)), 1)
 
     check("kleine letters worden genormaliseerd",
-          stocks.add("heia.as").get("already"), True)
+          stocks.add(TEST_USER, "heia.as").get("already"), True)
 
     try:
-        stocks.add("ONZIN123")
+        stocks.add(TEST_USER, "ONZIN123")
         check("onbekend symbool geweigerd", "geen fout", "ValueError")
     except ValueError:
         check("onbekend symbool geweigerd", "ValueError", "ValueError")
-    check("en komt niet in de lijst", len(stocks.watchlist()), 1)
+    check("en komt niet in de lijst", len(stocks.watchlist(TEST_USER)), 1)
 
     # --- ambiguous labels ------------------------------------------------
-    stocks.add("HEIO.AS", "Heineken Holding N.V.")
-    labels = [q["label"] for q in stocks.ticker_quotes()]
+    stocks.add(TEST_USER, "HEIO.AS", "Heineken Holding N.V.")
+    labels = [q["label"] for q in stocks.ticker_quotes(TEST_USER)]
     check("gelijke labels worden onderscheiden", len(set(labels)), 2)
     check("valt terug op het symbool", sorted(labels), ["HEIA", "HEIO"])
 
@@ -68,34 +70,34 @@ try:
         for i in range(stocks.MAX_WATCHLIST - 2):
             c.execute("INSERT INTO user_preferences(id,user_id,kind,topic_slug,value,"
                       "weight,created_at,updated_at) "
-                      "VALUES(?,'local','stock',?,?,1.0,'x','x')",
-                      (f"stk_t{i}", f"TEST{i}", f"Test {i}"))
-    check("lijst zit vol", len(stocks.watchlist()), stocks.MAX_WATCHLIST)
+                      "VALUES(?,?,'stock',?,?,1.0,'x','x')",
+                      (f"stk_t{i}", TEST_USER, f"TEST{i}", f"Test {i}"))
+    check("lijst zit vol", len(stocks.watchlist(TEST_USER)), stocks.MAX_WATCHLIST)
     try:
-        stocks.add("AAPL", "Apple")
+        stocks.add(TEST_USER, "AAPL", "Apple")
         check("vol -> geweigerd", "geen fout", "ValueError")
     except ValueError:
         check("vol -> geweigerd", "ValueError", "ValueError")
 
     # --- removal ---------------------------------------------------------
-    stocks.remove("HEIA.AS")
-    check("verwijderen werkt", "HEIA.AS" in [w["symbol"] for w in stocks.watchlist()], False)
-    stocks.remove("BESTAATNIET")
+    stocks.remove(TEST_USER, "HEIA.AS")
+    check("verwijderen werkt", "HEIA.AS" in [w["symbol"] for w in stocks.watchlist(TEST_USER)], False)
+    stocks.remove(TEST_USER, "BESTAATNIET")
     check("onbekend verwijderen is stil", True, True)
 
     # --- failures never drop a row --------------------------------------
-    rows = stocks.ticker_quotes()
-    check("elke bewaakte regel komt terug", len(rows), len(stocks.watchlist()))
+    rows = stocks.ticker_quotes(TEST_USER)
+    check("elke bewaakte regel komt terug", len(rows), len(stocks.watchlist(TEST_USER)))
     check("mislukte koers blijft zichtbaar",
           all("symbol" in r and "label" in r for r in rows), True)
 finally:
     with tx() as c:
-        c.execute("DELETE FROM user_preferences WHERE kind='stock'")
+        c.execute("DELETE FROM user_preferences WHERE kind='stock' AND user_id='u:testsuite@example.invalid'")
         for s in saved:
             c.execute("INSERT INTO user_preferences(id,user_id,kind,topic_slug,value,"
                       "weight,created_at,updated_at) "
-                      "VALUES(?,'local','stock',?,?,1.0,'restored','restored')",
-                      (f"stk_r{s}", s, s))
+                      "VALUES(?,?,'stock',?,?,1.0,'restored','restored')",
+                      (f"stk_r{s}", TEST_USER, s, s))
 
 print(f"\n{ok}/{ok + fail} geslaagd")
 sys.exit(1 if fail else 0)

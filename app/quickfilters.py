@@ -71,9 +71,10 @@ def _row_to_filter(row) -> dict:
     }
 
 
-def list_all() -> list[dict]:
+def list_all(user: str) -> list[dict]:
     rows = query("SELECT topic_slug, value, weight, created_at FROM user_preferences "
-                 "WHERE kind='quickfilter' ORDER BY weight, rowid")
+                 "WHERE user_id=? AND kind='quickfilter' ORDER BY weight, rowid",
+                 (user,))
     return [_row_to_filter(r) for r in rows]
 
 
@@ -86,7 +87,7 @@ def _unique_slug(label: str, existing: set[str]) -> str:
     return slug
 
 
-def add(label: str, qs: str) -> dict:
+def add(user: str, label: str, qs: str) -> dict:
     label = (label or "").strip()[:MAX_LABEL]
     canonical = normalise(qs)
     if not label:
@@ -94,7 +95,7 @@ def add(label: str, qs: str) -> dict:
     if not canonical:
         raise ValueError("dit filter is leeg — stel eerst een filter in")
 
-    current = list_all()
+    current = list_all(user)
     if len(current) >= MAX_FILTERS:
         raise ValueError(f"maximaal {MAX_FILTERS} snelfilters")
     # Same filter under a different name is almost always a mistake, and two
@@ -108,38 +109,38 @@ def add(label: str, qs: str) -> dict:
     ts = iso(now())
     with tx() as c:
         c.execute("INSERT INTO user_preferences(id,user_id,kind,topic_slug,value,"
-                  "weight,created_at,updated_at) VALUES(?,'local','quickfilter',?,?,?,?,?)",
-                  (new_id("qf_"), slug, json.dumps({"label": label, "qs": canonical}),
-                   order, ts, ts))
+                  "weight,created_at,updated_at) VALUES(?,?,'quickfilter',?,?,?,?,?)",
+                  (new_id("qf_"), user, slug,
+                   json.dumps({"label": label, "qs": canonical}), order, ts, ts))
     return {"slug": slug, "label": label, "qs": canonical, "order": order}
 
 
-def rename(slug: str, label: str) -> None:
+def rename(user: str, slug: str, label: str) -> None:
     label = (label or "").strip()[:MAX_LABEL]
     if not label:
         raise ValueError("naam mag niet leeg zijn")
-    row = query("SELECT value FROM user_preferences WHERE kind='quickfilter' "
-                "AND topic_slug=?", (slug,))
+    row = query("SELECT value FROM user_preferences WHERE user_id=? "
+                "AND kind='quickfilter' AND topic_slug=?", (user, slug))
     if not row:
         raise LookupError(slug)
     payload = json.loads(row[0]["value"] or "{}")
     payload["label"] = label
     with tx() as c:
         c.execute("UPDATE user_preferences SET value=?, updated_at=? "
-                  "WHERE kind='quickfilter' AND topic_slug=?",
-                  (json.dumps(payload), iso(now()), slug))
+                  "WHERE user_id=? AND kind='quickfilter' AND topic_slug=?",
+                  (json.dumps(payload), iso(now()), user, slug))
 
 
-def remove(slug: str) -> None:
+def remove(user: str, slug: str) -> None:
     with tx() as c:
-        c.execute("DELETE FROM user_preferences WHERE kind='quickfilter' AND topic_slug=?",
-                  (slug,))
+        c.execute("DELETE FROM user_preferences WHERE user_id=? AND kind='quickfilter' "
+                  "AND topic_slug=?", (user, slug))
 
 
-def reorder(slugs: list[str]) -> None:
+def reorder(user: str, slugs: list[str]) -> None:
     """Apply a new order. Slugs not mentioned keep their relative position
     after the ones that are, so a partial list can never drop a filter."""
-    current = [f["slug"] for f in list_all()]
+    current = [f["slug"] for f in list_all(user)]
     known = set(current)
     wanted = [s for s in dict.fromkeys(slugs) if s in known]
     # Keep the remainder in its existing order. A set difference would lose
@@ -147,5 +148,5 @@ def reorder(slugs: list[str]) -> None:
     rest = [s for s in current if s not in set(wanted)]
     with tx() as c:
         for order, slug in enumerate(wanted + rest):
-            c.execute("UPDATE user_preferences SET weight=? WHERE kind='quickfilter' "
-                      "AND topic_slug=?", (order, slug))
+            c.execute("UPDATE user_preferences SET weight=? WHERE user_id=? "
+                      "AND kind='quickfilter' AND topic_slug=?", (order, user, slug))

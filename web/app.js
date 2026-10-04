@@ -8,7 +8,7 @@
 const API = {
   async get(path) {
     const r = await fetch(path, { headers: { Accept: 'application/json' } });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    if (!r.ok) throw await apiError(r);
     return r.json();
   },
   async send(path, method, body) {
@@ -17,12 +17,54 @@ const API = {
       headers: { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    if (!r.ok) throw new Error((await r.text()) || r.statusText);
+    if (!r.ok) throw await apiError(r);
     return r.status === 204 ? null : r.json();
   },
   post(p, b) { return this.send(p, 'POST', b); },
   del(p) { return this.send(p, 'DELETE'); },
 };
+
+/* 401 and 403 are not ordinary failures: one means "sign in", the other means
+   "this account was never invited". Both need their own screen rather than a
+   red box saying 403. */
+async function apiError(r) {
+  let detail = null;
+  try { detail = (await r.clone().json()).detail; } catch { /* not JSON */ }
+  const err = new Error(
+    (detail && (detail.message || detail)) || `${r.status} ${r.statusText}`);
+  err.status = r.status;
+  err.detail = detail;
+  if (r.status === 401 || r.status === 403) showAuthGate(r.status, detail);
+  return err;
+}
+
+/* Replaces the whole page: with no identity there is nothing to show, and
+   leaving stale content on screen would suggest it still belongs to someone. */
+function showAuthGate(status, detail) {
+  if (state.authGate) return;
+  state.authGate = true;
+  document.querySelector('#ticker')?.setAttribute('hidden', '');
+  const email = detail?.email ? esc(detail.email) : '';
+  main.innerHTML = status === 403
+    ? `<div class="gate">
+         <h1>Geen toegang</h1>
+         <p>${email ? `Het account <strong>${email}</strong> staat niet` : 'Dit account staat niet'}
+            op de gastenlijst van deze nieuwsapp.</p>
+         <p class="muted">Vraag de beheerder om je toe te voegen, of meld je aan
+            met een ander account.</p>
+         <p><a class="btn" href="/.auth/logout?post_logout_redirect_uri=/">Afmelden
+            en opnieuw proberen</a></p>
+       </div>`
+    : `<div class="gate">
+         <h1>Even aanmelden</h1>
+         <p>Meld je aan om je eigen voorpagina, favorieten en leesgeschiedenis
+            te zien.</p>
+         <p>
+           <a class="btn" href="/.auth/login/aad?post_login_redirect_uri=/">Aanmelden met Microsoft</a>
+           <a class="btn ghost" href="/.auth/login/google?post_login_redirect_uri=/">Aanmelden met Google</a>
+         </p>
+       </div>`;
+}
 
 const state = {
   meta: null, filters: {}, busy: false, topSignature: null,
@@ -1773,7 +1815,8 @@ window.addEventListener('hashchange', route);
   if (savedView === 'list' || savedView === 'cards') state.view = savedView;
   ticker.paused = localStorage.getItem('nieuws-ticker') === 'paused';
   wireTicker();
-  await Promise.all([loadMeta(), loadQuickFilters()]);
+  await Promise.all([loadMe(), loadMeta(), loadQuickFilters()]);
+  if (state.authGate) return;        // nothing to render without an identity
   route();
   loadTicker();
   setInterval(loadMeta, 60000);
@@ -1783,6 +1826,23 @@ window.addEventListener('hashchange', route);
   // polling more often than that would only burn requests.
   setInterval(loadTicker, 60000);
 })();
+
+async function loadMe() {
+  try {
+    state.me = await API.get('/api/me');
+  } catch { return; }
+  const el = $('#whoami');
+  if (!el || !state.me) return;
+  const m = state.me;
+  // Locally there is no sign-in, so showing a user chip would be a lie.
+  if (!m.hosted) { el.hidden = true; return; }
+  const initial = (m.name || m.email || '?').trim().charAt(0).toUpperCase();
+  el.hidden = false;
+  el.innerHTML = `
+    <span class="avatar" title="${esc(m.name || '')}${
+      m.email ? ' · ' + esc(m.email) : ''}">${esc(initial)}</span>
+    <a class="signout" href="${esc(m.logout_url)}" title="Afmelden">Afmelden</a>`;
+}
 
 function wireTicker() {
   const bar = $('#ticker');

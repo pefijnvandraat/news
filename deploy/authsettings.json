@@ -1,0 +1,33 @@
+{
+  "properties": {
+    "platform": { "enabled": true, "runtimeVersion": "~1" },
+    "globalValidation": {
+      "requireAuthentication": true,
+      "unauthenticatedClientAction": "RedirectToLoginPage",
+      "redirectToProvider": "azureactivedirectory",
+      "excludedPaths": ["/api/health"]
+    },
+    "identityProviders": {
+      "azureActiveDirectory": {
+        "enabled": true,
+        "registration": {
+          "clientId": "__CLIENT_ID__",
+          "openIdIssuer": "https://login.microsoftonline.com/__TENANT__/v2.0"
+        },
+        "login": { "loginParameters": ["scope=openid profile email"] },
+        "validation": {
+          "allowedAudiences": ["__CLIENT_ID__"],
+          "defaultAuthorizationPolicy": { "allowedApplications": [] }
+        }
+      }
+    },
+    "login": {
+      "tokenStore": { "enabled": true },
+      "preserveUrlFragmentsForLogins": true
+    },
+    "httpSettings": {
+      "requireHttps": true,
+      "forwardProxy": { "convention": "NoProxy" }
+    }
+  }
+}

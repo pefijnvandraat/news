@@ -6,13 +6,13 @@ import logging
 import threading
 import time
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import os
 
-from . import config, personalise, quickfilters, stocks
+from . import config, identity, personalise, quickfilters, stocks
 from .cluster import recluster
 from .db import init_db, one, query, tx
 from .ingest.discover import discover
@@ -153,15 +153,49 @@ def _story_rows(where: str = "", params: tuple = (), order: str = "frontpage_sco
     return [dict(r) for r in query(sql, (*params, limit))]
 
 
-def _decorate(stories: list[dict], with_articles: bool = False) -> list[dict]:
+# ---------------------------------------------------------------------------
+# Who is asking
+# ---------------------------------------------------------------------------
+def me(request: Request) -> dict:
+    """The signed-in user for this request.
+
+    A FastAPI dependency, so every endpoint that touches personal data has to
+    name it and cannot quietly operate on someone else's account.
+    """
+    try:
+        user = identity.current_user(request.headers)
+    except identity.AccessDenied as exc:
+        raise HTTPException(403, {
+            "error": "not_invited",
+            "email": exc.email,
+            "message": f"{exc.email} staat niet op de gastenlijst van deze nieuwsapp.",
+        })
+    except identity.NotSignedIn as exc:
+        raise HTTPException(401, {"error": "not_signed_in", "message": str(exc)})
+
+    # First sign-in by the designated owner inherits the single-user data from
+    # before sign-in existed. Cheap to re-check and a no-op afterwards.
+    if identity.is_legacy_owner(user):
+        moved = personalise.claim_legacy_data(user["id"])
+        if moved:
+            log.info("legacy data overgedragen aan %s (%s rijen)", user["id"], moved)
+    return user
+
+
+def uid(user: dict = Depends(me)) -> str:
+    return user["id"]
+
+
+def _decorate(stories: list[dict], with_articles: bool = False, *,
+              user: str) -> list[dict]:
     ids = [s["id"] for s in stories]
     topics_map = load_story_topics(ids)
     pubs_map = story_publishers(ids)
     pub_meta = {r["id"]: dict(r) for r in query("SELECT * FROM publishers")}
-    saved = personalise.saved_story_ids()
-    hidden = personalise.hidden_story_ids()
-    feedback = personalise.explicit_feedback()
-    followed = personalise.followed_story_ids()
+    saved = personalise.saved_story_ids(user=user)
+    hidden = personalise.hidden_story_ids(user=user)
+    feedback = personalise.explicit_feedback(user=user)
+    followed = personalise.followed_story_ids(user=user)
     arts: dict[str, list[dict]] = {}
     if with_articles and ids:
         marks = ",".join("?" * len(ids))
@@ -286,12 +320,13 @@ def api_refresh(scope: str = Query("full", pattern="^(full|priority)$")):
 # Front page
 # ---------------------------------------------------------------------------
 @app.get("/api/frontpage")
-def frontpage(limit: int = Query(16, ge=1, le=60), include_read: bool = False):
-    hidden = personalise.hidden_story_ids()
+def frontpage(limit: int = Query(16, ge=1, le=60), include_read: bool = False,
+              user: str = Depends(uid)):
+    hidden = personalise.hidden_story_ids(user=user)
     hide_read = (not include_read
-                 and personalise.get_setting("hide_read", "on") == "on")
-    read = personalise.read_state() if hide_read else {}
-    followed = personalise.followed_story_ids()
+                 and personalise.get_setting("hide_read", "on", user=user) == "on")
+    read = personalise.read_state(user=user) if hide_read else {}
+    followed = personalise.followed_story_ids(user=user)
     skipped = {"count": 0}
 
     def is_read(row) -> bool:
@@ -331,14 +366,14 @@ def frontpage(limit: int = Query(16, ge=1, le=60), include_read: bool = False):
         rows = pick(_story_rows("WHERE category=?", (slug,),
                                 order="frontpage_score DESC", limit=limit * 3), 6, set())
         if rows:
-            categories[slug] = _decorate(rows)
+            categories[slug] = _decorate(rows, user=user)
 
     return {
         "generated_at": iso(now()),
-        "top": _decorate(top),
-        "latest": _decorate(latest),
-        "trending": _decorate(trending),
-        "fryslan": _decorate(fryslan),
+        "top": _decorate(top, user=user),
+        "latest": _decorate(latest, user=user),
+        "trending": _decorate(trending, user=user),
+        "fryslan": _decorate(fryslan, user=user),
         "categories": categories,
         "read_skipped": skipped["count"],
         "hide_read": hide_read,
@@ -350,7 +385,8 @@ def frontpage(limit: int = Query(16, ge=1, le=60), include_read: bool = False):
 def stories(q: str | None = None, topic: str | None = None, publisher: str | None = None,
             category: str | None = None, location: str | None = None,
             hours: int = Query(0, ge=0, le=720), saved: bool = False,
-            limit: int = Query(40, ge=1, le=120), offset: int = Query(0, ge=0)):
+            limit: int = Query(40, ge=1, le=120), offset: int = Query(0, ge=0),
+            user: str = Depends(uid)):
     wheres, params = [], []
     if category:
         wheres.append("s.category=?")
@@ -372,7 +408,7 @@ def stories(q: str | None = None, topic: str | None = None, publisher: str | Non
         wheres.append("s.id IN (SELECT a.story_id FROM articles a WHERE a.publisher_id=?)")
         params.append(publisher)
     if saved:
-        ids = personalise.saved_story_ids()
+        ids = personalise.saved_story_ids(user=user)
         if not ids:
             return {"stories": [], "total": 0}
         wheres.append(f"s.id IN ({','.join('?' * len(ids))})")
@@ -382,7 +418,7 @@ def stories(q: str | None = None, topic: str | None = None, publisher: str | Non
 
     # Hidden stories must be excluded before counting, otherwise the header
     # promises more results than the list can ever show.
-    hidden = personalise.hidden_story_ids()
+    hidden = personalise.hidden_story_ids(user=user)
     count_clause, count_params = clause, list(params)
     if hidden and len(hidden) < 900:        # stay well under SQLite's variable cap
         joiner = " AND " if wheres else "WHERE "
@@ -404,15 +440,15 @@ def stories(q: str | None = None, topic: str | None = None, publisher: str | Non
         "ORDER BY s.frontpage_score DESC LIMIT ? OFFSET ?",
         (*count_params, limit, offset))]
     rows = [r for r in rows if r["id"] not in hidden]
-    return {"stories": _decorate(rows), "total": total}
+    return {"stories": _decorate(rows, user=user), "total": total}
 
 
 @app.get("/api/stories/{story_id}")
-def story_detail(story_id: str):
+def story_detail(story_id: str, user: str = Depends(uid)):
     row = one("SELECT * FROM stories WHERE id=?", (story_id,))
     if row is None:
         raise HTTPException(404, "Story niet gevonden")
-    story = _decorate([dict(row)], with_articles=True)[0]
+    story = _decorate([dict(row)], with_articles=True, user=user)[0]
 
     timeline = []
     for a in story["articles"] or []:
@@ -430,7 +466,7 @@ def story_detail(story_id: str):
     related = [dict(r) for r in query(
         "SELECT * FROM stories WHERE id!=? AND category=? ORDER BY frontpage_score DESC LIMIT 5",
         (story_id, row["category"]))]
-    story["related"] = _decorate(related)
+    story["related"] = _decorate(related, user=user)
     return story
 
 
@@ -438,8 +474,9 @@ def story_detail(story_id: str):
 # Topics & favourites
 # ---------------------------------------------------------------------------
 @app.get("/api/topics")
-def topics(q: str | None = None, limit: int = Query(60, ge=1, le=300)):
-    favs = {f["slug"] for f in personalise.list_favourites()}
+def topics(q: str | None = None, limit: int = Query(60, ge=1, le=300),
+           user: str = Depends(uid)):
+    favs = {f["slug"] for f in personalise.list_favourites(user=user)}
     sql = """SELECT t.slug, t.label, t.kind, COUNT(st.story_id) AS story_count
              FROM topics t LEFT JOIN story_topics st ON st.topic_id=t.id """
     params: list = []
@@ -455,39 +492,39 @@ def topics(q: str | None = None, limit: int = Query(60, ge=1, le=300)):
 
 
 @app.get("/api/favourites")
-def get_favourites():
-    return {"favourites": personalise.list_favourites()}
+def get_favourites(user: str = Depends(uid)):
+    return {"favourites": personalise.list_favourites(user=user)}
 
 
 @app.post("/api/favourites")
-def post_favourite(payload: dict = Body(...)):
+def post_favourite(payload: dict = Body(...), user: str = Depends(uid)):
     raw = (payload.get("slug") or payload.get("label") or "").strip()
     if not raw:
         raise HTTPException(400, "slug of label is verplicht")
     slug = slugify(raw)
-    personalise.add_favourite(slug, payload.get("label") or raw)
-    return {"ok": True, "favourites": personalise.list_favourites()}
+    personalise.add_favourite(slug, payload.get("label") or raw, user=user)
+    return {"ok": True, "favourites": personalise.list_favourites(user=user)}
 
 
 @app.delete("/api/favourites/{slug}")
-def delete_favourite(slug: str):
-    personalise.remove_favourite(slug)
-    return {"ok": True, "favourites": personalise.list_favourites()}
+def delete_favourite(slug: str, user: str = Depends(uid)):
+    personalise.remove_favourite(slug, user=user)
+    return {"ok": True, "favourites": personalise.list_favourites(user=user)}
 
 
 # ---------------------------------------------------------------------------
 # My News
 # ---------------------------------------------------------------------------
 @app.get("/api/mynews")
-def mynews(limit: int = Query(40, ge=1, le=100)):
+def mynews(limit: int = Query(40, ge=1, le=100), user: str = Depends(uid)):
     rows = _story_rows(order="frontpage_score DESC", limit=220)
-    result = personalise.build_my_news(rows, limit=limit)
-    decorated = _decorate(result["stories"])
+    result = personalise.build_my_news(rows, limit=limit, user=user)
+    decorated = _decorate(result["stories"], user=user)
     for src, dst in zip(result["stories"], decorated):
         dst["score"] = round(float(src.get("score") or 0), 4)
         dst["reasons"] = src.get("reasons")
         dst["discovery"] = src.get("discovery", False)
-    personalise.store_recommendations(result["stories"])
+    personalise.store_recommendations(result["stories"], user=user)
     return {"cold_start": result["cold_start"], "has_favourites": result["has_favourites"],
             "learned_count": result["learned_count"],
             "read_skipped": result["read_skipped"], "hide_read": result["hide_read"],
@@ -495,77 +532,78 @@ def mynews(limit: int = Query(40, ge=1, le=100)):
 
 
 @app.post("/api/interactions")
-def post_interaction(payload: dict = Body(...)):
+def post_interaction(payload: dict = Body(...), user: str = Depends(uid)):
     action = (payload.get("action") or "").strip()
     personalise.record_interaction(action, payload.get("story_id"),
-                                   payload.get("article_id"), payload.get("publisher_id"))
+                                   payload.get("article_id"),
+                                   payload.get("publisher_id"), user=user)
     return {"ok": True}
 
 
 @app.get("/api/read")
-def api_read():
+def api_read(user: str = Depends(uid)):
     """Stories you have already read, most recently read first."""
-    rows = personalise.read_stories()
-    decorated = _decorate(rows)
+    rows = personalise.read_stories(user=user)
+    decorated = _decorate(rows, user=user)
     for src, dst in zip(rows, decorated):
         dst["read_at"] = src["read_at"]
         dst["updated_since_read"] = src["updated_since_read"]
     return {
         "stories": decorated,
         "total": len(decorated),
-        "hide_read": personalise.get_setting("hide_read", "on") == "on",
+        "hide_read": personalise.get_setting("hide_read", "on", user=user) == "on",
     }
 
 
 @app.post("/api/read/unread")
-def api_mark_unread(payload: dict = Body(default={})):
+def api_mark_unread(payload: dict = Body(default={}), user: str = Depends(uid)):
     """Put one story, or all of them, back on the front page."""
     story_id = (payload or {}).get("story_id")
-    return {"ok": True, "restored": personalise.mark_unread(story_id)}
+    return {"ok": True, "restored": personalise.mark_unread(story_id, user=user)}
 
 
 @app.get("/api/followed")
-def api_followed():
+def api_followed(user: str = Depends(uid)):
     """Stories you follow, so they stay on the front page after reading."""
-    rows = personalise.followed_stories()
-    return {"stories": _decorate(rows), "total": len(rows)}
+    rows = personalise.followed_stories(user=user)
+    return {"stories": _decorate(rows, user=user), "total": len(rows)}
 
 
 @app.post("/api/settings/hide-read")
-def api_hide_read(payload: dict = Body(...)):
+def api_hide_read(payload: dict = Body(...), user: str = Depends(uid)):
     """Toggle whether read stories are filtered from the front page."""
     enabled = bool(payload.get("enabled", True))
-    personalise.set_setting("hide_read", "on" if enabled else "off")
+    personalise.set_setting("hide_read", "on" if enabled else "off", user=user)
     return {"ok": True, "hide_read": enabled}
 
 
 @app.get("/api/privacy")
-def privacy():
-    return personalise.privacy_snapshot()
+def privacy(user: str = Depends(uid)):
+    return personalise.privacy_snapshot(user=user)
 
 
 @app.post("/api/privacy/reset")
-def privacy_reset():
-    return {"ok": True, "deleted": personalise.reset_learned()}
+def privacy_reset(user: str = Depends(uid)):
+    return {"ok": True, "deleted": personalise.reset_learned(user=user)}
 
 
 @app.post("/api/privacy/forget")
-def privacy_forget(payload: dict = Body(...)):
+def privacy_forget(payload: dict = Body(...), user: str = Depends(uid)):
     slug = (payload.get("slug") or "").strip()
     if not slug:
         raise HTTPException(400, "slug is verplicht")
-    personalise.forget_topic(slug)
+    personalise.forget_topic(slug, user=user)
     return {"ok": True}
 
 
 @app.post("/api/privacy/unhide")
-def privacy_unhide(payload: dict = Body(default={})):
+def privacy_unhide(payload: dict = Body(default={}), user: str = Depends(uid)):
     """Restore one hidden story, or all of them when story_id is omitted."""
     story_id = (payload or {}).get("story_id")
     if story_id:
-        personalise.record_interaction("unhide", story_id=story_id)
+        personalise.record_interaction("unhide", story_id=story_id, user=user)
         return {"ok": True, "restored": 1}
-    return {"ok": True, "restored": personalise.unhide_all()}
+    return {"ok": True, "restored": personalise.unhide_all(user=user)}
 
 
 # ---------------------------------------------------------------------------
@@ -662,13 +700,13 @@ def toggle_source(source_id: str, payload: dict = Body(...)):
 
 
 @app.get("/api/ticker")
-def ticker(limit: int = Query(10, ge=3, le=30)):
+def ticker(limit: int = Query(10, ge=3, le=30), user: str = Depends(uid)):
     """Headlines and quotes for the strip under the address bar.
 
     One endpoint rather than two: the ticker polls on a timer, and a single
     round trip keeps headlines and prices in step with each other.
     """
-    hidden = personalise.hidden_story_ids()
+    hidden = personalise.hidden_story_ids(user=user)
     rows = [r for r in _story_rows(order="frontpage_score DESC", limit=limit * 3)
             if r["id"] not in hidden][:limit]
     items = [{
@@ -681,51 +719,54 @@ def ticker(limit: int = Query(10, ge=3, le=30)):
         "updated_at": r["last_updated_at"],
     } for r in rows]
     return {"generated_at": iso(now()), "stories": items,
-            "stocks": stocks.ticker_quotes()}
+            "stocks": stocks.ticker_quotes(user)}
 
 
 @app.get("/api/stocks")
-def list_stocks(refresh: bool = False):
-    return {"watchlist": stocks.watchlist(), "quotes": stocks.ticker_quotes(refresh),
+def list_stocks(refresh: bool = False, user: str = Depends(uid)):
+    return {"watchlist": stocks.watchlist(user),
+            "quotes": stocks.ticker_quotes(user, refresh),
             "max": stocks.MAX_WATCHLIST}
 
 
 @app.get("/api/stocks/search")
-def search_stocks(q: str = Query("", min_length=0)):
+def search_stocks(q: str = Query("", min_length=0), user: str = Depends(uid)):
     return {"results": stocks.search(q)}
 
 
 @app.post("/api/stocks")
-def add_stock(payload: dict = Body(...)):
+def add_stock(payload: dict = Body(...), user: str = Depends(uid)):
     try:
-        return stocks.add(payload.get("symbol") or "", payload.get("name"))
+        return stocks.add(user, payload.get("symbol") or "", payload.get("name"))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 
 
 @app.delete("/api/stocks/{symbol}")
-def delete_stock(symbol: str):
-    stocks.remove(symbol)
+def delete_stock(symbol: str, user: str = Depends(uid)):
+    stocks.remove(user, symbol)
     return {"ok": True}
 
 
 @app.get("/api/quickfilters")
-def list_quickfilters():
-    return {"filters": quickfilters.list_all(), "max": quickfilters.MAX_FILTERS}
+def list_quickfilters(user: str = Depends(uid)):
+    return {"filters": quickfilters.list_all(user), "max": quickfilters.MAX_FILTERS}
 
 
 @app.post("/api/quickfilters")
-def add_quickfilter(payload: dict = Body(...)):
+def add_quickfilter(payload: dict = Body(...), user: str = Depends(uid)):
     try:
-        return quickfilters.add(payload.get("label") or "", payload.get("qs") or "")
+        return quickfilters.add(user, payload.get("label") or "",
+                                payload.get("qs") or "")
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 
 
 @app.patch("/api/quickfilters/{slug}")
-def rename_quickfilter(slug: str, payload: dict = Body(...)):
+def rename_quickfilter(slug: str, payload: dict = Body(...),
+                       user: str = Depends(uid)):
     try:
-        quickfilters.rename(slug, payload.get("label") or "")
+        quickfilters.rename(user, slug, payload.get("label") or "")
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     except LookupError:
@@ -734,15 +775,32 @@ def rename_quickfilter(slug: str, payload: dict = Body(...)):
 
 
 @app.delete("/api/quickfilters/{slug}")
-def delete_quickfilter(slug: str):
-    quickfilters.remove(slug)
+def delete_quickfilter(slug: str, user: str = Depends(uid)):
+    quickfilters.remove(user, slug)
     return {"ok": True}
 
 
 @app.post("/api/quickfilters/order")
-def reorder_quickfilters(payload: dict = Body(...)):
-    quickfilters.reorder(payload.get("slugs") or [])
-    return {"ok": True, "filters": quickfilters.list_all()}
+def reorder_quickfilters(payload: dict = Body(...), user: str = Depends(uid)):
+    quickfilters.reorder(user, payload.get("slugs") or [])
+    return {"ok": True, "filters": quickfilters.list_all(user)}
+
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+@app.get("/api/me")
+def whoami(user: dict = Depends(me)):
+    """Who the frontend is talking as, plus where to sign out."""
+    return {
+        "id": user["id"],
+        "name": user.get("name") or "",
+        "email": user.get("email") or "",
+        "provider": user.get("provider") or "",
+        "dev": bool(user.get("dev")),
+        "logout_url": "/.auth/logout?post_logout_redirect_uri=/",
+        "hosted": identity.HOSTED,
+    }
 
 
 # ---------------------------------------------------------------------------

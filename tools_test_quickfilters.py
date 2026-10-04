@@ -11,6 +11,8 @@ sys.path.insert(0, ".")
 from app import quickfilters as qf  # noqa: E402
 from app.db import query, tx  # noqa: E402
 
+TEST_USER = "u:testsuite@example.invalid"
+
 ok = fail = 0
 
 
@@ -31,9 +33,9 @@ def expect_error(label, fn):
 
 saved = [(r["topic_slug"], r["value"], r["weight"]) for r in
          query("SELECT topic_slug, value, weight FROM user_preferences "
-               "WHERE kind='quickfilter' ORDER BY weight, rowid")]
+               "WHERE kind='quickfilter' AND user_id='u:testsuite@example.invalid' ORDER BY weight, rowid")]
 with tx() as c:
-    c.execute("DELETE FROM user_preferences WHERE kind='quickfilter'")
+    c.execute("DELETE FROM user_preferences WHERE kind='quickfilter' AND user_id='u:testsuite@example.invalid'")
 
 try:
     # --- canonicalisation ------------------------------------------------
@@ -52,77 +54,77 @@ try:
     check("leeg blijft leeg", qf.normalise(""), "")
 
     # --- adding ----------------------------------------------------------
-    check("begint leeg", qf.list_all(), [])
-    a = qf.add("Fryslân nu", "hours=24&location=fryslan")
+    check("begint leeg", qf.list_all(TEST_USER), [])
+    a = qf.add(TEST_USER, "Fryslân nu", "hours=24&location=fryslan")
     check("opgeslagen in canonieke vorm", a["qs"], "location=fryslan&hours=24")
     check("slug afgeleid van naam", a["slug"], "fryslan-nu")
 
     expect_error("zelfde filter, andere naam geweigerd",
-                 lambda: qf.add("Anders", "location=fryslan&hours=24"))
-    expect_error("leeg filter geweigerd", lambda: qf.add("Niets", "limit=60"))
-    expect_error("naamloos geweigerd", lambda: qf.add("", "category=tech"))
-    check("geen van die pogingen is opgeslagen", len(qf.list_all()), 1)
+                 lambda: qf.add(TEST_USER, "Anders", "location=fryslan&hours=24"))
+    expect_error("leeg filter geweigerd", lambda: qf.add(TEST_USER, "Niets", "limit=60"))
+    expect_error("naamloos geweigerd", lambda: qf.add(TEST_USER, "", "category=tech"))
+    check("geen van die pogingen is opgeslagen", len(qf.list_all(TEST_USER)), 1)
 
-    qf.add("Fryslân nu", "category=sport")
+    qf.add(TEST_USER, "Fryslân nu", "category=sport")
     check("dubbele naam krijgt eigen slug",
-          [f["slug"] for f in qf.list_all()], ["fryslan-nu", "fryslan-nu-2"])
+          [f["slug"] for f in qf.list_all(TEST_USER)], ["fryslan-nu", "fryslan-nu-2"])
 
     # --- ordering --------------------------------------------------------
-    qf.add("Derde", "category=tech")
-    qf.reorder(["derde", "fryslan-nu-2", "fryslan-nu"])
-    check("volgorde toegepast", [f["slug"] for f in qf.list_all()],
+    qf.add(TEST_USER, "Derde", "category=tech")
+    qf.reorder(TEST_USER, ["derde", "fryslan-nu-2", "fryslan-nu"])
+    check("volgorde toegepast", [f["slug"] for f in qf.list_all(TEST_USER)],
           ["derde", "fryslan-nu-2", "fryslan-nu"])
 
-    qf.reorder(["fryslan-nu"])
-    check("gedeeltelijke lijst laat niets vallen", len(qf.list_all()), 3)
-    check("genoemde komt vooraan", qf.list_all()[0]["slug"], "fryslan-nu")
+    qf.reorder(TEST_USER, ["fryslan-nu"])
+    check("gedeeltelijke lijst laat niets vallen", len(qf.list_all(TEST_USER)), 3)
+    check("genoemde komt vooraan", qf.list_all(TEST_USER)[0]["slug"], "fryslan-nu")
     check("niet-genoemde houden hun onderlinge volgorde",
-          [f["slug"] for f in qf.list_all()], ["fryslan-nu", "derde", "fryslan-nu-2"])
+          [f["slug"] for f in qf.list_all(TEST_USER)], ["fryslan-nu", "derde", "fryslan-nu-2"])
 
-    qf.reorder(["bestaatniet", "derde"])
-    check("onbekende slug wordt genegeerd", len(qf.list_all()), 3)
-    check("en de rest blijft op volgorde", [f["slug"] for f in qf.list_all()],
+    qf.reorder(TEST_USER, ["bestaatniet", "derde"])
+    check("onbekende slug wordt genegeerd", len(qf.list_all(TEST_USER)), 3)
+    check("en de rest blijft op volgorde", [f["slug"] for f in qf.list_all(TEST_USER)],
           ["derde", "fryslan-nu", "fryslan-nu-2"])
 
     # --- renaming and removing -------------------------------------------
-    qf.rename("derde", "Hernoemd")
-    check("hernoemd", next(f["label"] for f in qf.list_all() if f["slug"] == "derde"),
+    qf.rename(TEST_USER, "derde", "Hernoemd")
+    check("hernoemd", next(f["label"] for f in qf.list_all(TEST_USER) if f["slug"] == "derde"),
           "Hernoemd")
     check("filter zelf ongewijzigd",
-          next(f["qs"] for f in qf.list_all() if f["slug"] == "derde"), "category=tech")
-    expect_error("lege naam geweigerd", lambda: qf.rename("derde", "   "))
+          next(f["qs"] for f in qf.list_all(TEST_USER) if f["slug"] == "derde"), "category=tech")
+    expect_error("lege naam geweigerd", lambda: qf.rename(TEST_USER, "derde", "   "))
 
     try:
-        qf.rename("bestaatniet", "X")
+        qf.rename(TEST_USER, "bestaatniet", "X")
         check("onbekende slug hernoemen", "geen fout", "LookupError")
     except LookupError:
         check("onbekende slug hernoemen", "LookupError", "LookupError")
 
-    qf.remove("derde")
-    check("verwijderd", [f["slug"] for f in qf.list_all()],
+    qf.remove(TEST_USER, "derde")
+    check("verwijderd", [f["slug"] for f in qf.list_all(TEST_USER)],
           ["fryslan-nu", "fryslan-nu-2"])
-    qf.remove("bestaatniet")
-    check("onbekend verwijderen is stil", len(qf.list_all()), 2)
+    qf.remove(TEST_USER, "bestaatniet")
+    check("onbekend verwijderen is stil", len(qf.list_all(TEST_USER)), 2)
 
     # --- cap -------------------------------------------------------------
     for i in range(qf.MAX_FILTERS - 2):
-        qf.add(f"Test {i}", f"q=test{i}")
-    check("lijst zit vol", len(qf.list_all()), qf.MAX_FILTERS)
-    expect_error("vol -> geweigerd", lambda: qf.add("Te veel", "q=extra"))
+        qf.add(TEST_USER, f"Test {i}", f"q=test{i}")
+    check("lijst zit vol", len(qf.list_all(TEST_USER)), qf.MAX_FILTERS)
+    expect_error("vol -> geweigerd", lambda: qf.add(TEST_USER, "Te veel", "q=extra"))
 
     # --- label length ----------------------------------------------------
-    qf.remove("fryslan-nu")
+    qf.remove(TEST_USER, "fryslan-nu")
     long_name = "x" * 80
-    f = qf.add(long_name, "q=lang")
+    f = qf.add(TEST_USER, long_name, "q=lang")
     check("naam afgekapt", len(f["label"]), qf.MAX_LABEL)
 finally:
     with tx() as c:
-        c.execute("DELETE FROM user_preferences WHERE kind='quickfilter'")
+        c.execute("DELETE FROM user_preferences WHERE kind='quickfilter' AND user_id='u:testsuite@example.invalid'")
         for slug, value, weight in saved:
             c.execute("INSERT INTO user_preferences(id,user_id,kind,topic_slug,value,"
                       "weight,created_at,updated_at) "
-                      "VALUES(?,'local','quickfilter',?,?,?,'restored','restored')",
-                      (f"qf_r{slug}", slug, value, weight))
+                      "VALUES(?,?,'quickfilter',?,?,?,'restored','restored')",
+                      (f"qf_r{slug}", TEST_USER, slug, value, weight))
 
 print(f"\n{ok}/{ok + fail} geslaagd")
 sys.exit(1 if fail else 0)
