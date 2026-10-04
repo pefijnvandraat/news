@@ -24,7 +24,7 @@ const API = {
   del(p) { return this.send(p, 'DELETE'); },
 };
 
-const state = { meta: null, filters: {}, busy: false };
+const state = { meta: null, filters: {}, busy: false, topSignature: null };
 const whyCache = new Map();
 const $ = (sel, root = document) => root.querySelector(sel);
 const main = $('#main');
@@ -609,11 +609,29 @@ async function doRefresh() {
   if (state.busy) return;
   state.busy = true;
   $('#refresh').classList.add('spin');
-  try { await API.post('/api/refresh'); await loadMeta(); route(); }
+  try { await API.post('/api/refresh?scope=full'); await loadMeta(); route(); }
   catch (e) { console.warn(e); }
   finally { state.busy = false; $('#refresh').classList.remove('spin'); }
 }
 $('#refresh').addEventListener('click', doRefresh);
+
+/* Keep the front page honest while it sits open: ask the server for a priority
+   sweep (top-story feeds only) and repaint if anything actually moved. */
+async function pollTopStories() {
+  if (state.busy || document.hidden) return;
+  const path = (location.hash || '#/front').split('?')[0];
+  if (path !== '#/front' && path !== '#/mynews') return;
+  try {
+    await API.post('/api/refresh?scope=priority');
+    await loadMeta();
+    const fresh = await API.get('/api/frontpage?limit=13');
+    const signature = fresh.top.map((s) => `${s.id}:${s.last_updated_at}`).join('|');
+    if (signature !== state.topSignature) {
+      state.topSignature = signature;
+      if (path === '#/front') route();
+    }
+  } catch { /* transient: the next tick will retry */ }
+}
 
 async function loadMeta() {
   try {
@@ -624,7 +642,24 @@ async function loadMeta() {
       strip.innerHTML = `⚠ Tijdelijk niet beschikbaar: ${state.meta.degraded.map(esc).join(', ')}
         — de overige bronnen werken gewoon. <a href="#/sources" style="color:inherit;text-decoration:underline">Details</a>`;
     } else { strip.hidden = true; }
+    renderFreshness();
   } catch { /* meta is optional for rendering */ }
+}
+
+/* Freshness indicator: shows when the top stories were last re-checked, which
+   happens far more often than the full sweep over every feed. */
+function renderFreshness() {
+  const el = $('#freshness');
+  if (!el || !state.meta) return;
+  const s = state.meta.status || {};
+  const last = s.last_priority_run || s.last_run;
+  const every = Math.round((state.meta.priority_refresh_seconds || 120) / 60);
+  el.textContent = last ? `Top bijgewerkt ${ago(last)}` : 'Nog niet bijgewerkt';
+  el.title = `Topverhalen worden elke ${every} min opnieuw gecontroleerd `
+    + `(${state.meta.priority_source_count || 0} prioriteitsbronnen). `
+    + `Volledige ronde over alle ${state.meta.sources?.length || 0} feeds elke `
+    + `${Math.round((state.meta.refresh_seconds || 600) / 60)} min.`
+    + (s.last_run ? ` Laatste volledige ronde: ${clock(s.last_run)}.` : '');
 }
 
 window.addEventListener('hashchange', route);
@@ -634,5 +669,7 @@ window.addEventListener('hashchange', route);
   if (saved) document.documentElement.dataset.theme = saved;
   await loadMeta();
   route();
-  setInterval(loadMeta, 120000);
+  setInterval(loadMeta, 60000);
+  const everyMs = Math.max(60, state.meta?.priority_refresh_seconds || 120) * 1000;
+  setInterval(pollTopStories, everyMs);
 })();

@@ -97,7 +97,12 @@ img { display: block; max-width: 100%; }
   position: absolute; right: 4px; background: none; border: 0; color: var(--muted);
   font-size: 19px; padding: 4px 9px;
 }
-.topbar-actions { display: flex; gap: 4px; }
+.topbar-actions { display: flex; gap: 4px; align-items: center; }
+.freshness {
+  font-size: 11.5px; color: var(--faint); white-space: nowrap; padding-right: 4px;
+  cursor: default;
+}
+@media (max-width: 900px) { .freshness { display: none; } }
 .icon-btn {
   background: none; border: 1px solid transparent; color: var(--muted);
   width: 36px; height: 36px; border-radius: 9px; font-size: 17px;

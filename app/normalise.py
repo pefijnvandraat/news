@@ -114,7 +114,8 @@ def upsert(article: dict) -> str:
     """
     ts = iso(now())
     existing = one(
-        "SELECT id, content_hash, revision, story_id, title FROM articles WHERE url_hash=?",
+        "SELECT id, content_hash, revision, story_id, title, updated_at "
+        "FROM articles WHERE url_hash=?",
         (article["url_hash"],),
     )
     if existing is None:
@@ -138,7 +139,15 @@ def upsert(article: dict) -> str:
             c.execute("UPDATE articles SET last_seen_at=? WHERE id=?", (ts, existing["id"]))
         return "unchanged"
 
-    # The publisher revised the article after publication.
+    # The publisher revised the article after publication. Many feeds reuse the
+    # original pubDate even when the text changes, so if the feed's timestamp is
+    # not newer than what we already stored we record the detection time instead.
+    # Without this a genuine revision would never reach "Laatste nieuws" or mark
+    # the story as still developing.
+    feed_updated = article.get("updated_at")
+    if not feed_updated or feed_updated <= (existing["updated_at"] or ""):
+        feed_updated = ts
+
     with tx() as c:
         c.execute(
             """UPDATE articles SET title=:title, description=:description,
@@ -149,6 +158,6 @@ def upsert(article: dict) -> str:
                    entities=:entities, tokens=:tokens
                WHERE id=:id""",
             {**article, "id": existing["id"], "last_seen_at": ts,
-             "updated_at": article["updated_at"] or ts},
+             "updated_at": feed_updated},
         )
     return "updated"

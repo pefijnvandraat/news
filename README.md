@@ -18,7 +18,7 @@ HTML of feed-eigenaardigheden van een individuele uitgever.
 
 | # | Laag | Bestand | Verantwoordelijkheid |
 |---|------|---------|----------------------|
-| 1 | Bron-ingestie | `app/ingest/` | Adapters per mechanisme (`rss.py`, `html.py`) achter één contract (`base.py`); `pipeline.py` draait alle bronnen parallel |
+| 1 | Bron-ingestie | `app/ingest/` | Adapters per mechanisme (`rss.py`, `html.py`) achter één contract (`base.py`); `pipeline.py` draait alle bronnen parallel en kan een deelverzameling verversen |
 | 2 | Normalisatie | `app/normalise.py` | `RawItem` → gemeenschappelijk Article-model + idempotente upsert |
 | 3 | Story-clustering | `app/cluster.py` | TF-IDF-cosinus + entiteit-overlap + categorie + tijd → stabiele story-ids |
 | 4 | Topic/entiteit-extractie | `app/topics.py` | Nederlandse tokenisatie, entiteiten, curated topics, geo-scope, categorie-mapping |
@@ -28,6 +28,43 @@ HTML of feed-eigenaardigheden van een individuele uitgever.
 | 8 | Gedragssignalen | `app/personalise.py` | Interacties met tijdsverval |
 | 9 | Personalisatie | `app/personalise.py` | Score, uitleg, diversiteit, serendipiteit |
 | 10 | Presentatie | `app/api.py` + `web/` | JSON-API en responsieve SPA |
+
+### Verversstrategie — topverhalen eerst
+
+Niet elke feed is even urgent. Een verhaal dat nú op de voorpagina staat is het
+meest waarschijnlijk het verhaal dat wordt gecorrigeerd, uitgebreid of ingehaald.
+De app gebruikt daarom twee verversrondes:
+
+| Ronde | Interval | Bereik |
+|-------|----------|--------|
+| **Prioriteit** | elke 2 min (`NIEUWS_PRIORITY_SECONDS`) | alleen de feeds achter de huidige topverhalen — doorgaans 12 van de 26 |
+| **Volledig** | elke 10 min (`NIEUWS_REFRESH_SECONDS`) | alle ingeschakelde feeds, zodat ook rustige secties bijblijven |
+
+`priority_source_ids()` bepaalt de selectie: het neemt de top‑N verhalen op
+`frontpage_score`, zoekt op welke feeds die artikelen leverden, en voegt per
+betrokken uitgever ook de algemene feed toe — vervolgberichtgeving over een
+lopend verhaal verschijnt daar meestal eerder dan in de smalle sectiefeed.
+
+Clustering en scoring draaien **altijd** over het volledige venster van 60 uur,
+ook na een gedeeltelijke fetch. Een prioriteitsronde kan de voorpagina dus nooit
+inconsistent achterlaten.
+
+De ronde is handmatig te forceren:
+
+```
+POST /api/refresh?scope=priority     # alleen topverhaal-feeds
+POST /api/refresh?scope=full         # alles
+```
+
+In de UI toont de kop rechtsboven **"Top bijgewerkt …"**; de tooltip vermeldt
+beide intervallen en hoeveel prioriteitsbronnen er nu zijn. Zolang de voorpagina
+open staat vraagt de client zelf elke 2 minuten een prioriteitsronde aan en
+hertekent alleen wanneer er daadwerkelijk iets veranderd is.
+
+**Herziene artikelen.** Veel uitgevers hergebruiken de oorspronkelijke `pubDate`
+ook als de tekst wijzigt. Bij een gewijzigde content-hash gebruikt `upsert()`
+daarom het detectiemoment als `updated_at`, anders zou een echte herziening nooit
+in *Laatste nieuws* belanden of het verhaal als "wordt bijgewerkt" markeren.
 
 ### Een uitgever toevoegen
 
@@ -165,8 +202,8 @@ geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 | Endpoint | Beschrijving |
 |----------|--------------|
 | `GET /api/health` | Status, aantallen, laatste run |
-| `GET /api/meta` | Categorieën, uitgevers, bronnen, gedegradeerde feeds |
-| `POST /api/refresh` | Handmatig ophalen + herclusteren |
+| `GET /api/meta` | Categorieën, uitgevers, bronnen, prioriteitsvlag per bron, gedegradeerde feeds |
+| `POST /api/refresh?scope=full\|priority` | Handmatig ophalen + herclusteren |
 | `GET /api/frontpage` | Top / Laatste / Trending / Fryslân / per categorie |
 | `GET /api/stories` | Zoeken + filteren op `q, topic, publisher, category, location, hours, saved` |
 | `GET /api/stories/{id}` | Verhaaldetail met tijdlijn, bronartikelen, gerelateerd |
@@ -182,19 +219,40 @@ geen gevoelige persoonskenmerken afgeleid en niets verlaat de machine.
 ## Draaien
 
 ```powershell
-py -3.12 -m pip install fastapi uvicorn feedparser httpx
+py -3.12 -m pip install -r requirements.txt
 cd nieuws
 py -3.12 run.py          # http://127.0.0.1:8500
 ```
 
-Via pm2 (zoals in de App Hub):
+Als achtergronddienst via pm2 — `pythonw.exe` zorgt dat er **geen consolevenster**
+verschijnt:
 
 ```powershell
-pm2 start run.py --name nieuws --interpreter py --interpreter-args "-3.12"
+pm2 start ecosystem.config.js
+pm2 save
 ```
 
-Het nieuws wordt bij de start opgehaald en daarna elke 10 minuten ververst
-(`NIEUWS_REFRESH_SECONDS`). Poort via `NIEUWS_PORT`, database via `NIEUWS_DB`.
+Omdat er onder `pythonw.exe` geen console is, schrijft `run.py` altijd een
+roterend logbestand naar `data/nieuws.log` (plus `data/pm2-*.log` van pm2 zelf).
+
+### Instellingen
+
+| Variabele | Standaard | Betekenis |
+|-----------|-----------|-----------|
+| `NIEUWS_PORT` | `8500` | HTTP-poort |
+| `NIEUWS_DB` | `data/nieuws.db` | Pad naar de database |
+| `NIEUWS_REFRESH_SECONDS` | `600` | Interval volledige ronde |
+| `NIEUWS_PRIORITY_SECONDS` | `120` | Interval prioriteitsronde (topverhalen) |
+| `NIEUWS_PRIORITY_TOP_N` | `24` | Hoeveel topverhalen de prioriteitsselectie bepalen |
+| `NIEUWS_PRIORITY_MAX_SOURCES` | `12` | Maximum aantal feeds per prioriteitsronde |
+
+### Onderhoudsscripts
+
+```powershell
+py -3.12 tools_rebuild.py              # taxonomie opnieuw toepassen + verhalen herbouwen
+py -3.12 tools_profile.py priority     # tijdsverdeling van een ronde meten
+py -3.12 tools_remove_publisher.py id  # uitgever + artikelen verwijderen
+```
 
 ---
 

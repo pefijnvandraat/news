@@ -57,15 +57,34 @@ def _record(report: dict) -> None:
         )
 
 
-def run_ingest(max_workers: int = 8) -> dict:
-    """Fetch all enabled sources in parallel. Returns a per-source report."""
-    sources = [dict(r) for r in query(
-        "SELECT s.*, p.enabled AS pub_enabled FROM sources s "
-        "JOIN publishers p ON p.id = s.publisher_id "
-        "WHERE s.enabled=1 AND p.enabled=1"
-    )]
+def load_sources(source_ids: list[str] | None = None) -> list[dict]:
+    """Enabled sources, optionally narrowed to an explicit set."""
+    sql = ("SELECT s.* FROM sources s JOIN publishers p ON p.id = s.publisher_id "
+           "WHERE s.enabled=1 AND p.enabled=1")
+    params: tuple = ()
+    if source_ids:
+        marks = ",".join("?" * len(source_ids))
+        sql += f" AND s.id IN ({marks})"
+        params = tuple(source_ids)
+    return [dict(r) for r in query(sql, params)]
+
+
+def run_ingest(max_workers: int | None = None, source_ids: list[str] | None = None,
+               scope: str = "full") -> dict:
+    """Fetch sources in parallel. Pass source_ids to refresh only those feeds.
+
+    Returns a per-source report. A failing source degrades only itself.
+    """
+    sources = load_sources(source_ids)
     if not sources:
-        return {"started_at": iso(now()), "sources": [], "new": 0, "updated": 0}
+        return {"finished_at": iso(now()), "scope": scope, "sources": [],
+                "new": 0, "updated": 0, "failed": []}
+
+    # Feed fetching is I/O-bound, so a single wave over the whole batch costs
+    # about as much as the slowest feed. The cap keeps us from opening an
+    # unreasonable number of sockets if many publishers are ever added.
+    if max_workers is None:
+        max_workers = min(len(sources), 16)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         reports = list(pool.map(_fetch_source, sources))
@@ -75,8 +94,49 @@ def run_ingest(max_workers: int = 8) -> dict:
 
     return {
         "finished_at": iso(now()),
+        "scope": scope,
+        "source_count": len(sources),
         "sources": reports,
         "new": sum(r["new"] for r in reports),
         "updated": sum(r["updated"] for r in reports),
         "failed": [r["name"] for r in reports if r["status"] == "error"],
     }
+
+
+def priority_source_ids(top_n: int = 24, max_sources: int = 12) -> list[str]:
+    """Feeds worth polling more often than the rest.
+
+    A story on the front page is the one most likely to be corrected, extended
+    or overtaken, so we re-poll exactly the feeds that produced it. Each
+    contributing publisher's general feed is added too, because follow-up
+    coverage of a developing story usually lands there first rather than in the
+    narrow section feed the original article came from.
+    """
+    rows = query(
+        """SELECT DISTINCT a.source_id, a.publisher_id
+           FROM articles a
+           JOIN (SELECT id FROM stories ORDER BY frontpage_score DESC LIMIT ?) s
+             ON s.id = a.story_id
+           WHERE a.source_id IS NOT NULL""",
+        (top_n,),
+    )
+    if not rows:
+        return []
+
+    direct = {r["source_id"] for r in rows}
+    publishers = {r["publisher_id"] for r in rows}
+
+    marks = ",".join("?" * len(publishers))
+    general = {r["id"] for r in query(
+        f"""SELECT s.id FROM sources s JOIN publishers p ON p.id = s.publisher_id
+            WHERE s.enabled=1 AND p.enabled=1 AND s.category_hint IS NULL
+              AND s.publisher_id IN ({marks})""", tuple(publishers))}
+
+    enabled = {r["id"] for r in query(
+        "SELECT s.id FROM sources s JOIN publishers p ON p.id = s.publisher_id "
+        "WHERE s.enabled=1 AND p.enabled=1")}
+
+    # General feeds first: they are the cheapest way to catch a developing story.
+    ordered = [sid for sid in general if sid in enabled]
+    ordered += [sid for sid in direct if sid in enabled and sid not in general]
+    return ordered[:max_sources]

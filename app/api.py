@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 
@@ -14,50 +15,102 @@ import os
 from . import config, personalise
 from .cluster import recluster
 from .db import init_db, one, query, tx
-from .ingest.pipeline import run_ingest
+from .ingest.pipeline import priority_source_ids, run_ingest
 from .ranking import (compute_front_page_scores, load_story_topics,
                       parse_json_list, story_publishers)
 from .topics import CURATED_TOPICS, topic_label
 from .util import iso, new_id, now, slugify
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+
+# Two-tier refresh. The full sweep keeps every section current; the priority
+# sweep re-polls only the feeds behind the current front-page top stories,
+# because those are the ones most likely to be corrected, extended or overtaken.
 REFRESH_SECONDS = int(os.environ.get("NIEUWS_REFRESH_SECONDS", "600"))
+PRIORITY_REFRESH_SECONDS = int(os.environ.get("NIEUWS_PRIORITY_SECONDS", "120"))
+PRIORITY_TOP_N = int(os.environ.get("NIEUWS_PRIORITY_TOP_N", "24"))
+PRIORITY_MAX_SOURCES = int(os.environ.get("NIEUWS_PRIORITY_MAX_SOURCES", "12"))
+
+log = logging.getLogger("nieuws.api")
 
 app = FastAPI(title="Nieuws", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
-_state = {"status": "idle", "last_run": None, "last_error": None, "report": None}
+_state = {
+    "status": "idle",
+    "last_run": None,
+    "last_priority_run": None,
+    "last_error": None,
+    "report": None,
+    "priority_sources": 0,
+}
 _lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
-def refresh(force: bool = False) -> dict:
-    if not _lock.acquire(blocking=False):
-        return {"status": "busy"}
+def refresh(scope: str = "full", wait: float = 0.0) -> dict:
+    """Ingest, re-cluster and re-score.
+
+    scope='priority' narrows ingestion to the feeds behind the current top
+    stories; clustering and scoring always run over the full recent window so a
+    partial fetch can never leave the front page inconsistent.
+
+    wait>0 blocks for up to that many seconds for an in-flight run to finish.
+    Scheduled sweeps pass 0 and skip, because another run is already underway;
+    an explicit request from the user waits so it does not silently no-op.
+    """
+    if not _lock.acquire(blocking=wait > 0, timeout=wait if wait > 0 else -1):
+        return {"status": "busy", "scope": scope}
     try:
-        _state["status"] = "running"
-        report = run_ingest()
+        _state["status"] = f"running:{scope}"
+        source_ids = None
+        if scope == "priority":
+            source_ids = priority_source_ids(PRIORITY_TOP_N, PRIORITY_MAX_SOURCES)
+            _state["priority_sources"] = len(source_ids)
+            if not source_ids:
+                scope = "full"  # nothing ranked yet - fall back to a full sweep
+
+        report = run_ingest(source_ids=source_ids, scope=scope)
         cluster_report = recluster()
         compute_front_page_scores()
-        _state.update({"status": "idle", "last_run": iso(now()),
-                       "last_error": None,
-                       "report": {"ingest": report, "cluster": cluster_report}})
+
+        stamp = iso(now())
+        _state.update({
+            "status": "idle",
+            "last_error": None,
+            "last_priority_run": stamp,
+            "report": {"ingest": report, "cluster": cluster_report},
+        })
+        if scope == "full":
+            _state["last_run"] = stamp
+        log.info("refresh scope=%s sources=%s new=%s updated=%s failed=%s",
+                 scope, report.get("source_count"), report["new"],
+                 report["updated"], len(report["failed"]))
         return _state["report"]
     except Exception as exc:
         _state.update({"status": "error", "last_error": f"{type(exc).__name__}: {exc}"})
+        log.exception("refresh failed")
         return {"error": _state["last_error"]}
     finally:
         _lock.release()
 
 
 def _background_loop() -> None:
+    """Interleave priority and full sweeps on a single timer."""
+    elapsed = 0
+    tick = max(15, min(PRIORITY_REFRESH_SECONDS, REFRESH_SECONDS))
     while True:
-        time.sleep(REFRESH_SECONDS)
+        time.sleep(tick)
+        elapsed += tick
         try:
-            refresh()
+            if elapsed >= REFRESH_SECONDS:
+                elapsed = 0
+                refresh("full")
+            else:
+                refresh("priority")
         except Exception:
-            pass
+            log.exception("background refresh loop error")
 
 
 @app.on_event("startup")
@@ -72,9 +125,12 @@ def _startup() -> None:
 def _first_run() -> None:
     row = one("SELECT COUNT(*) AS n FROM articles")
     if row and row["n"] == 0:
-        refresh()
+        refresh("full")
     else:
         compute_front_page_scores()
+        # Existing content is already ranked, so the first sweep can be the
+        # cheap one that keeps the visible top stories current.
+        refresh("priority")
 
 
 def _ensure_curated_topics() -> None:
@@ -200,6 +256,9 @@ def meta():
     sources = [dict(r) for r in query(
         "SELECT s.*, p.name AS publisher_name, p.colour FROM sources s "
         "JOIN publishers p ON p.id=s.publisher_id ORDER BY p.name, s.name")]
+    priority = set(priority_source_ids(PRIORITY_TOP_N, PRIORITY_MAX_SOURCES))
+    for s in sources:
+        s["priority"] = s["id"] in priority
     return {
         "categories": [{"slug": s, "label": l} for s, l in config.CATEGORIES],
         "publishers": [dict(r) for r in query("SELECT * FROM publishers ORDER BY name")],
@@ -207,12 +266,15 @@ def meta():
         "degraded": [s["name"] for s in sources if s["last_status"] == "error"],
         "status": _state,
         "refresh_seconds": REFRESH_SECONDS,
+        "priority_refresh_seconds": PRIORITY_REFRESH_SECONDS,
+        "priority_source_count": len(priority),
     }
 
 
 @app.post("/api/refresh")
-def api_refresh():
-    return refresh(force=True)
+def api_refresh(scope: str = Query("full", pattern="^(full|priority)$")):
+    """scope=priority re-polls only the feeds behind the current top stories."""
+    return refresh(scope, wait=90.0)
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +510,7 @@ def add_source(payload: dict = Body(...)):
                   "user_added,created_at) VALUES(?,?,?,?,?,?,1,1,?)",
                   (new_id("src_"), pub_id, payload.get("name") or pub_name, url,
                    payload.get("kind") or "rss", payload.get("category_hint"), ts))
-    threading.Thread(target=refresh, daemon=True).start()
+    threading.Thread(target=refresh, args=("full",), daemon=True).start()
     return {"ok": True}
 
 
