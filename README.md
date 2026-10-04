@@ -153,6 +153,36 @@ zodat opgeslagen interacties blijven kloppen.
 
 ---
 
+## Weergave: kaarten of lijst
+
+Elke nieuwspagina (Voorpagina, Mijn nieuws, zoeken, onderwerp, categorie,
+bewaard) heeft linksboven een schakelaar:
+
+* **Kaarten** — de standaard: grote kaarten mét afbeelding, samenvatting en
+  bronbadges.
+* **Lijst** — een compacte tabel **zonder afbeeldingen**, waarin veel meer
+  verhalen tegelijk op het scherm passen.
+
+De lijstweergave heeft de kolommen **Sectie** (alleen op de voorpagina),
+**Titel**, **Uitgevers**, **Status**, **Categorie**, **Bijgewerkt** en
+**Waarom** (alleen bij Mijn nieuws), plus dezelfde actieknoppen als op de
+kaarten: bewaren, meer zo, minder zo, verbergen. Klik op een kolomkop om te
+sorteren; de tweede koprij bevat per kolom een filter.
+
+Twee bewuste keuzes:
+
+* **Standaardvolgorde = de rangschikking van de pagina zelf** — nieuwswaarde op
+  de voorpagina, relevantie bij Mijn nieuws. Pas als je een kolomkop aanklikt
+  neemt jouw sortering het over. De voettekst onder de tabel vermeldt altijd
+  welke volgorde actief is.
+* **Sortering en filters resetten bij paginawissel.** Anders zou een filter van
+  de ene pagina stilzwijgend rijen verbergen op de volgende, en zou een oude
+  sortering de ranking van de nieuwe pagina overschrijven.
+
+De keuze kaarten/lijst wordt onthouden in `localStorage`. Op smalle schermen
+verbergt de tabel achtereenvolgens de minst essentiële kolommen, zodat titel,
+tijd en acties altijd zichtbaar blijven.
+
 ## Ranking
 
 **Voorpagina** (identiek voor iedereen):

@@ -534,7 +534,22 @@ def toggle_source(source_id: str, payload: dict = Body(...)):
 # ---------------------------------------------------------------------------
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(WEB_DIR, "index.html"))
+    return FileResponse(os.path.join(WEB_DIR, "index.html"),
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.middleware("http")
+async def _revalidate_static(request, call_next):
+    """Force the browser to revalidate front-end assets.
+
+    Without this the browser serves a cached styles.css/app.js indefinitely and
+    front-end changes silently never reach the user. 'no-cache' still allows a
+    cheap 304 via ETag, so this costs a conditional request, not a re-download.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")

@@ -24,7 +24,16 @@ const API = {
   del(p) { return this.send(p, 'DELETE'); },
 };
 
-const state = { meta: null, filters: {}, busy: false, topSignature: null };
+const state = {
+  meta: null, filters: {}, busy: false, topSignature: null,
+  view: 'cards',                       // 'cards' | 'list'
+  // An empty sort key means "keep the order the server delivered", which is
+  // the page's own ranking: relevance on My News, editorial score on the front
+  // page. Sorting only overrides that once you click a column.
+  listSort: { key: '', dir: 'desc' },
+  listFilters: {},
+  listRows: null, listCtx: {}, listRoute: null,
+};
 const whyCache = new Map();
 const $ = (sel, root = document) => root.querySelector(sel);
 const main = $('#main');
@@ -61,6 +70,20 @@ function clock(iso) {
   const d = new Date(iso);
   return isNaN(d) ? '' : d.toLocaleString('nl-NL',
     { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/* Compact relative time for the list view on narrow screens, where
+   "46 min geleden" costs more width than the action buttons need. */
+function agoShort(iso) {
+  if (!iso) return '?';
+  const d = new Date(iso);
+  if (isNaN(d)) return '?';
+  const m = Math.round((Date.now() - d.getTime()) / 60000);
+  if (m < 1) return 'nu';
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}u`;
+  return `${Math.round(h / 24)}d`;
 }
 
 function track(action, story, extra = {}) {
@@ -122,6 +145,201 @@ function storyCard(s, variant = '') {
   </article>`;
 }
 
+/* ---------------------------------------------------------------- list view
+   A compact, sortable, filterable table. Same data as the cards, minus the
+   images, so a lot more stories fit on screen at once. Column filters live in
+   a second header row so each control is unambiguously tied to its column. */
+
+const COLUMNS = {
+  section:   { label: 'Sectie',     sort: (s) => s.section || '',             filter: 'select' },
+  title:     { label: 'Titel',      sort: (s) => (s.headline || '').toLowerCase(), filter: 'text' },
+  publishers:{ label: 'Uitgevers',  sort: (s) => s.publisher_count || 0,      filter: 'minpubs', num: true },
+  status:    { label: 'Status',     sort: (s) => (s.is_updating ? 1 : 0),     filter: 'status' },
+  category:  { label: 'Categorie',  sort: (s) => s.category_label || '',      filter: 'select' },
+  updated:   { label: 'Bijgewerkt', sort: (s) => new Date(s.last_updated_at || 0).getTime(), num: true },
+  why:       { label: 'Waarom',     sort: (s) => (s.reasons?.[0]?.text || '').toLowerCase(), filter: 'text' },
+};
+
+function listColumns(ctx) {
+  const cols = [];
+  if (ctx.sections) cols.push('section');
+  cols.push('title', 'publishers', 'status', 'category', 'updated');
+  if (ctx.why) cols.push('why');
+  return cols;
+}
+
+function applyListFilters(rows) {
+  const f = state.listFilters;
+  return rows.filter((s) => {
+    if (f.title && !(s.headline || '').toLowerCase().includes(f.title.toLowerCase())) return false;
+    if (f.section && s.section !== f.section) return false;
+    if (f.category && s.category_label !== f.category) return false;
+    if (f.publishers && (s.publisher_count || 0) < Number(f.publishers)) return false;
+    if (f.status === 'dev' && !s.is_updating) return false;
+    if (f.status === 'stable' && s.is_updating) return false;
+    if (f.why && !(s.reasons?.[0]?.text || '').toLowerCase().includes(f.why.toLowerCase())) return false;
+    return true;
+  });
+}
+
+function applyListSort(rows) {
+  const { key, dir } = state.listSort;
+  if (!key || !COLUMNS[key]) return rows;
+  const get = COLUMNS[key].sort;
+  const mul = dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const x = get(a); const y = get(b);
+    if (x < y) return -1 * mul;
+    if (x > y) return 1 * mul;
+    return 0;
+  });
+}
+
+function filterCell(key, rows) {
+  const f = state.listFilters;
+  const uniq = (fn) => [...new Set(rows.map(fn).filter(Boolean))].sort();
+  const kind = COLUMNS[key].filter;
+  if (kind === 'text') {
+    return `<input type="search" data-lf="${key}" value="${esc(f[key] || '')}"
+      placeholder="filter…" aria-label="Filter op ${esc(COLUMNS[key].label)}" />`;
+  }
+  if (kind === 'select') {
+    const vals = key === 'section' ? uniq((s) => s.section) : uniq((s) => s.category_label);
+    return `<select data-lf="${key}" aria-label="Filter op ${esc(COLUMNS[key].label)}">
+      <option value="">alle</option>
+      ${vals.map((v) => `<option value="${esc(v)}" ${f[key] === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}
+    </select>`;
+  }
+  if (kind === 'minpubs') {
+    return `<select data-lf="publishers" aria-label="Minimaal aantal uitgevers">
+      <option value="">alle</option>
+      ${[2, 3, 4, 5].map((n) => `<option value="${n}" ${f.publishers == n ? 'selected' : ''}>${n}+</option>`).join('')}
+    </select>`;
+  }
+  if (kind === 'status') {
+    return `<select data-lf="status" aria-label="Filter op status">
+      <option value="">alle</option>
+      <option value="dev" ${f.status === 'dev' ? 'selected' : ''}>ontwikkelt zich</option>
+      <option value="stable" ${f.status === 'stable' ? 'selected' : ''}>stabiel</option>
+    </select>`;
+  }
+  return '';
+}
+
+function storyTable(rows, ctx = {}) {
+  rows.forEach((s) => { if (s.reasons?.length) whyCache.set(s.id, s.reasons); });
+  const cols = listColumns(ctx);
+  const shown = applyListSort(applyListFilters(rows));
+  const { key: sk, dir } = state.listSort;
+
+  const head = cols.map((c) => {
+    const active = sk === c ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
+    const arrow = sk === c ? (dir === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<th${active} class="${COLUMNS[c].num ? 'num' : ''} col-${c}">
+      <button class="sortbtn" data-sort="${c}">${esc(COLUMNS[c].label)}${arrow}</button></th>`;
+  }).join('') + '<th class="col-actions">Acties</th>';
+
+  const filters = cols.map((c) =>
+    `<td class="col-${c}">${filterCell(c, rows)}</td>`).join('') + '<td></td>';
+
+  const body = shown.map((s) => {
+    const cells = cols.map((c) => {
+      if (c === 'section') return `<td class="col-section"><span class="chip">${esc(s.section || '')}</span></td>`;
+      if (c === 'title') {
+        return `<td class="col-title"><a href="#/story/${esc(s.id)}">${esc(s.headline)}</a>
+          ${(s.topics || []).slice(0, 2).map((t) =>
+            `<span class="chip topic tiny" data-topic="${esc(t.slug)}">${esc(t.label)}</span>`).join('')}</td>`;
+      }
+      if (c === 'publishers') {
+        return `<td class="num col-publishers" title="${esc((s.publishers || []).map((p) => p.name).join(', '))}">
+          <span class="chip multi">${s.publisher_count}</span></td>`;
+      }
+      if (c === 'status') {
+        return `<td class="col-status">${s.is_updating
+          ? `<span class="chip live" title="${esc(DEVELOPING.tooltip)}">${esc(DEVELOPING.label)}</span>`
+          : '<span class="muted">—</span>'}</td>`;
+      }
+      if (c === 'category') {
+        return `<td class="col-category"><span class="chip cat">${esc(s.category_label || '')}</span></td>`;
+      }
+      if (c === 'updated') {
+        return `<td class="num col-updated" title="${esc(clock(s.last_updated_at))}">
+          <span class="t-full">${ago(s.last_updated_at)}</span>
+          <span class="t-short">${agoShort(s.last_updated_at)}</span></td>`;
+      }
+      if (c === 'why') {
+        const r = s.reasons?.[0]?.text || '';
+        return `<td class="col-why">${r
+          ? `<button class="why linkish" data-why="${esc(s.id)}">✨ ${esc(r)}</button>` : ''}</td>`;
+      }
+      return '<td></td>';
+    }).join('');
+
+    return `<tr data-story="${esc(s.id)}">${cells}
+      <td class="col-actions"><div class="rowacts">
+        <button class="mini ${s.saved ? 'on' : ''}" data-act="save" data-id="${esc(s.id)}"
+          title="Bewaar">${s.saved ? '★' : '☆'}</button>
+        <button class="mini" data-act="more" data-id="${esc(s.id)}" title="Meer zo">👍</button>
+        <button class="mini" data-act="less" data-id="${esc(s.id)}" title="Minder zo">👎</button>
+        <button class="mini" data-act="hide" data-id="${esc(s.id)}" title="Verberg">✕</button>
+      </div></td></tr>`;
+  }).join('');
+
+  const filtered = shown.length !== rows.length;
+  const ordering = state.listSort.key
+    ? `gesorteerd op ${esc(COLUMNS[state.listSort.key].label.toLowerCase())}`
+    : (ctx.why ? 'in volgorde van relevantie' : 'in volgorde van nieuwswaarde');
+  return `
+    <div class="tablewrap">
+      <table class="storytable">
+        <thead><tr>${head}</tr><tr class="filterrow">${filters}</tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+      ${shown.length ? '' : `<div class="state"><div class="big">🔍</div>
+        <h3>Geen verhalen na filteren</h3><p>Pas de filters in de koprij aan.</p>
+        <button data-action="clearfilters">Filters wissen</button></div>`}
+    </div>
+    <div class="tablefoot">${shown.length} van ${rows.length} verhalen · ${ordering}
+      ${filtered || state.listSort.key
+        ? '· <button class="linkish" data-action="clearfilters">standaard herstellen</button>' : ''}</div>`;
+}
+
+/* Toolbar with the card/list switch, shown on every news page. */
+function viewToolbar() {
+  return `<div class="viewbar">
+    <div class="viewtoggle" role="group" aria-label="Weergave">
+      <button class="vt ${state.view === 'cards' ? 'on' : ''}" data-view="cards"
+        title="Kaarten met afbeeldingen">▦ Kaarten</button>
+      <button class="vt ${state.view === 'list' ? 'on' : ''}" data-view="list"
+        title="Compacte lijst zonder afbeeldingen, sorteerbaar en filterbaar">☰ Lijst</button>
+    </div>
+  </div>`;
+}
+
+/* Re-render just the table after a sort/filter change, without refetching. */
+function rerenderTable() {
+  const host = document.querySelector('#tablehost');
+  if (host && state.listRows) {
+    host.innerHTML = storyTable(state.listRows, state.listCtx);
+  }
+}
+
+function tableHost(rows, ctx) {
+  state.listRows = rows;
+  state.listCtx = ctx;
+  return `<div id="tablehost">${storyTable(rows, ctx)}</div>`;
+}
+
+/* Sorting and filtering belong to one page's dataset. Carrying them across
+   navigation silently hides rows elsewhere, and a stale sort would override
+   the ranking the next page was built on. */
+function resetListState(routeKey) {
+  if (state.listRoute === routeKey) return;
+  state.listRoute = routeKey;
+  state.listSort = { key: '', dir: 'desc' };
+  state.listFilters = {};
+}
+
 function section(title, hint, stories, opts = {}) {
   if (!stories || !stories.length) return '';
   const lead = opts.lead && stories.length >= 3;
@@ -154,6 +372,7 @@ function errorState(msg) {
 
 /* ---------------------------------------------------------------- views */
 async function viewFront() {
+  resetListState('front');
   main.innerHTML = skeleton(6);
   try {
     const d = await API.get('/api/frontpage?limit=13');
@@ -168,7 +387,28 @@ async function viewFront() {
         state.meta?.categories.find((c) => c.slug === slug)?.label || slug,
         '', items.slice(0, 3), { more: `#/category/${slug}` })).join('');
 
-    main.innerHTML =
+    if (state.view === 'list') {
+      // Sections become a filterable column. The API already de-duplicates
+      // across top/latest/trending/fryslan, but the category blocks can repeat
+      // a story, so keep the first section a story appeared in.
+      const seen = new Set();
+      const rows = [];
+      const add = (label, items) => (items || []).forEach((s) => {
+        if (seen.has(s.id)) return;
+        seen.add(s.id);
+        rows.push({ ...s, section: label });
+      });
+      add('Top', d.top);
+      add('Laatste', d.latest);
+      add('Trending', d.trending);
+      add('Fryslân', d.fryslan);
+      Object.entries(d.categories || {}).forEach(([slug, items]) =>
+        add(state.meta?.categories.find((c) => c.slug === slug)?.label || slug, items));
+      main.innerHTML = viewToolbar() + tableHost(rows, { sections: true });
+      return;
+    }
+
+    main.innerHTML = viewToolbar() +
       section('Topverhalen', 'Gerangschikt op actualiteit, aantal onafhankelijke bronnen en nieuwswaarde',
               d.top, { lead: true }) +
       section('Laatste nieuws', 'Zojuist gepubliceerd of bijgewerkt', d.latest.slice(0, 8), { compact: true }) +
@@ -180,6 +420,7 @@ async function viewFront() {
 }
 
 async function viewMyNews() {
+  resetListState('mynews');
   main.innerHTML = skeleton(6);
   try {
     const d = await API.get('/api/mynews?limit=40');
@@ -196,8 +437,10 @@ async function viewMyNews() {
         Elk verhaal toont waarom het hier staat.
         <a href="#/privacy" style="color:var(--accent);font-weight:700">Beheer je gegevens →</a></div>`;
     }
-    main.innerHTML = head + (d.stories.length
-      ? `<div class="grid">${d.stories.map((s) => storyCard(s)).join('')}</div>`
+    main.innerHTML = viewToolbar() + head + (d.stories.length
+      ? (state.view === 'list'
+          ? tableHost(d.stories, { why: true })
+          : `<div class="grid">${d.stories.map((s) => storyCard(s)).join('')}</div>`)
       : emptyState('🔍', 'Geen verhalen', 'Voeg onderwerpen toe of ververs het nieuws.',
         { label: 'Naar favorieten', action: 'favorites' }));
   } catch (e) { main.innerHTML = errorState(e.message); }
@@ -251,16 +494,19 @@ async function viewFavorites() {
 }
 
 async function viewList(title, hint, qs) {
+  resetListState(`list:${qs}`);
   main.innerHTML = skeleton(6);
   try {
     const d = await API.get(`/api/stories?${qs}`);
-    main.innerHTML = `
+    main.innerHTML = viewToolbar() + `
       <section class="section">
         <div class="section-head"><h2>${esc(title)}</h2>
           <span class="hint">${esc(hint)} · ${d.total} verhalen</span></div>
         ${filterBar()}
         ${d.stories.length
-          ? `<div class="grid">${d.stories.map((s) => storyCard(s)).join('')}</div>`
+          ? (state.view === 'list'
+              ? tableHost(d.stories, {})
+              : `<div class="grid">${d.stories.map((s) => storyCard(s)).join('')}</div>`)
           : emptyState('🔍', 'Niets gevonden', 'Pas je zoekopdracht of filters aan.')}
       </section>`;
   } catch (e) { main.innerHTML = errorState(e.message); }
@@ -505,6 +751,31 @@ function route() {
 document.addEventListener('click', async (ev) => {
   const t = ev.target;
 
+  const viewBtn = t.closest('[data-view]');
+  if (viewBtn) {
+    ev.preventDefault();
+    if (state.view !== viewBtn.dataset.view) {
+      state.view = viewBtn.dataset.view;
+      localStorage.setItem('nieuws-view', state.view);
+      route();
+    }
+    return;
+  }
+
+  const sortBtn = t.closest('[data-sort]');
+  if (sortBtn) {
+    ev.preventDefault();
+    const key = sortBtn.dataset.sort;
+    const cur = state.listSort;
+    // First click on a new column sorts descending for numbers and dates
+    // (newest / most sources first) and ascending for text.
+    state.listSort = cur.key === key
+      ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: COLUMNS[key]?.num ? 'desc' : 'asc' };
+    rerenderTable();
+    return;
+  }
+
   const why = t.closest('[data-why]');
   if (why) { ev.preventDefault(); showWhy(why.dataset.why); return; }
 
@@ -563,6 +834,11 @@ document.addEventListener('click', async (ev) => {
     if (a === 'reload') route();
     if (a === 'refresh') doRefresh();
     if (a === 'favorites') location.hash = '#/favorites';
+    if (a === 'clearfilters') {
+      state.listFilters = {};
+      state.listSort = { key: '', dir: 'desc' };
+      rerenderTable();
+    }
     if (a === 'reset') {
       if (confirm('Alle geleerde voorkeuren en leesgeschiedenis wissen? Je favorieten blijven staan.')) {
         await API.post('/api/privacy/reset'); viewPrivacy();
@@ -575,12 +851,40 @@ document.addEventListener('click', async (ev) => {
 });
 
 document.addEventListener('change', (ev) => {
+  const lf = ev.target.closest('[data-lf]');
+  if (lf) {
+    const key = lf.dataset.lf;
+    const val = lf.value.trim();
+    if (val) state.listFilters[key] = val; else delete state.listFilters[key];
+    rerenderTable();
+    return;
+  }
+
   const f = ev.target.closest('[data-f]');
   if (!f) return;
   state.filters[f.dataset.f] = f.value;
   const qs = Object.entries(state.filters).filter(([, v]) => v)
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
   viewList('Gefilterde verhalen', 'Actieve filters', `${qs}&limit=60`);
+});
+
+/* Text filters should narrow as you type, not only on blur. */
+document.addEventListener('input', (ev) => {
+  const lf = ev.target.closest('input[data-lf]');
+  if (!lf) return;
+  const key = lf.dataset.lf;
+  const val = lf.value.trim();
+  if (val) state.listFilters[key] = val; else delete state.listFilters[key];
+  clearTimeout(state.lfTimer);
+  state.lfTimer = setTimeout(() => {
+    const active = document.activeElement?.dataset?.lf;
+    const caret = document.activeElement?.selectionStart;
+    rerenderTable();
+    if (active) {
+      const el = document.querySelector(`input[data-lf="${active}"]`);
+      if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch { /* non-text input */ } }
+    }
+  }, 180);
 });
 
 document.addEventListener('submit', async (ev) => {
@@ -682,6 +986,8 @@ window.addEventListener('hashchange', route);
 (async function boot() {
   const saved = localStorage.getItem('nieuws-theme');
   if (saved) document.documentElement.dataset.theme = saved;
+  const savedView = localStorage.getItem('nieuws-view');
+  if (savedView === 'list' || savedView === 'cards') state.view = savedView;
   await loadMeta();
   route();
   setInterval(loadMeta, 60000);
